@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AutoDeal — Meilleurs Deals 2ememain</title>
+
+  <!-- Identité visuelle -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- PapaParse pour CSV -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <style>
+    :root{ --ok:#16a34a; --warn:#d97706; --over:#dc2626; --fair:#334155; }
+    html, body { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial; }
+    .badge{display:inline-flex;align-items:center;gap:.5rem;padding:.35rem .7rem;border-radius:9999px;border:1px solid #e5e7eb;font-weight:700}
+    .dot{width:.6rem;height:.6rem;border-radius:9999px}
+    .badge.green .dot{background:var(--ok)}
+    .badge.amber .dot{background:var(--warn)}
+    .badge.red .dot{background:var(--over)}
+    .badge.gray .dot{background:var(--fair)}
+    .card{border:1px solid #e5e7eb;border-radius:1.25rem;background:white;box-shadow:0 10px 28px rgba(2,6,23,.06)}
+    .kcell{border:1px dashed #e5e7eb;border-radius:1rem;background:#f8fafc;padding:.8rem .9rem}
+    .pairs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.9rem}
+    .grid-3x3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.9rem}
+    .hero-grad{background:linear-gradient(180deg, #0f172a 0%, #0b1223 100%)}
+    .pill{border:1px solid #e5e7eb;border-radius:9999px;padding:.55rem .9rem;font-weight:700}
+    .thumb{object-fit:cover;width:72px;height:72px;border-radius:.6rem;border:1px solid #e5e7eb;background:#f1f5f9;cursor:pointer;flex:0 0 auto}
+    .thumb.active{outline:2px solid #0f172a}
+    .img-cover{width:100%;height:auto;border-radius:1rem;border:1px solid #e5e7eb;background:#f8fafc}
+    .img-skeleton{background: repeating-linear-gradient(90deg, #f1f5f9, #f1f5f9 10px, #eef2f7 10px, #eef2f7 20px);}
+    @media (max-width: 1024px){ .grid-3x3{grid-template-columns:repeat(2,minmax(0,1fr));} }
+    @media (max-width: 640px){ .pairs{grid-template-columns:1fr;} .grid-3x3{grid-template-columns:1fr;} }
+    details summary::-webkit-details-marker{display:none}
+    details summary{cursor:pointer}
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+
+  <!-- HERO / Marque -->
+  <header class="hero-grad text-white border-b border-slate-800/50">
+    <div class="max-w-4xl mx-auto px-5 py-10">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center">
+          <span class="text-xl font-extrabold">A</span>
+        </div>
+        <div>
+          <h1 class="text-2xl sm:text-3xl font-extrabold tracking-tight">AutoDeal</h1>
+          <p class="text-sm sm:text-base text-slate-300">Compare • Évalue • Décide — meilleurs deals 2ememain, lisibles en un coup d’œil.</p>
+        </div>
+      </div>
+
+      <!-- Barre de filtres -->
+      <div class="mt-7 bg-white/5 rounded-2xl border border-white/10 p-4 backdrop-blur">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+          <div class="lg:col-span-5">
+            <label class="text-xs text-slate-300 font-semibold block mb-1">Source</label>
+            <select id="sourceSelect" class="w-full bg-white text-slate-900 rounded-xl px-3 py-2.5 border border-slate-200"></select>
+          </div>
+          <div class="lg:col-span-3">
+            <label class="text-xs text-slate-300 font-semibold block mb-1">Trier par</label>
+            <select id="sortSelect" class="w-full bg-white text-slate-900 rounded-xl px-3 py-2.5 border border-slate-200">
+              <option>Remise (%)</option>
+              <option>Remise (€)</option>
+              <option>Prix (€)</option>
+              <option>Année</option>
+              <option>Kilométrage</option>
+              <option>Prix juste (€)</option>
+            </select>
+          </div>
+          <div class="lg:col-span-2">
+            <label class="text-xs text-slate-300 font-semibold block mb-1">Ordre</label>
+            <select id="orderSelect" class="w-full bg-white text-slate-900 rounded-xl px-3 py-2.5 border border-slate-200">
+              <option value="desc">Décroissant</option>
+              <option value="asc">Croissant</option>
+            </select>
+          </div>
+          <div class="lg:col-span-2 flex items-end gap-2">
+            <button id="resetBtn" class="w-full bg-white text-slate-900 rounded-xl px-3 py-2.5 border border-slate-200 font-extrabold">Réinitialiser</button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-3">
+          <div><label class="text-xs text-slate-300 font-semibold block mb-1">Prix min (€)</label>
+            <input id="priceMin" type="number" class="w-full bg-white text-slate-900 rounded-xl px-3 py-2.5 border border-slate-200" />
+          </div>
+          <div><label class="text-xs text-slate-300 font-semibold block mb-1">Prix max (€)</label>
+            <input id="priceMax" type="number" class="w-full bg-white text-slate-900 rounded-xl px-3 py-2.5 border border-slate-200" />
+          </div>
+          <div><label class="text-xs text-slate-300 font-semibold block mb-1">Km min</label>
+            <input id="kmMin" type="number" class="w-full bg-white text-slate-900 rounded-xl px-3 py-2.5 border border-slate-200" />
+          </div>
+          <div><label class="text-xs text-slate-300 font-semibold block mb-1">Km max</label>
+            <input id="kmMax" type="number" class="w-full bg-white text-slate-900 rounded-xl px-3 py-2.5 border border-slate-200" />
+          </div>
+          <div><label class="text-xs text-slate-300 font-semibold block mb-1">Année min</label>
+            <input id="yearMin" type="number" class="w-full bg-white text-slate-900 rounded-xl px-3 py-2.5 border border-slate-200" />
+          </div>
+          <div><label class="text-xs text-slate-300 font-semibold block mb-1">Année max</label>
+            <input id="yearMax" type="number" class="w-full bg-white text-slate-900 rounded-xl px-3 py-2.5 border border-slate-200" />
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Corps : 1 annonce par ligne -->
+  <main class="max-w-3xl mx-auto px-5 py-10">
+    <div id="resultInfo" class="text-sm text-slate-600 mb-6"></div>
+    <div id="cards" class="flex flex-col gap-8"></div>
+
+    <!-- Pagination -->
+    <div class="flex items-center justify-center gap-3 mt-10">
+      <button id="prevBtn" class="pill bg-white hover:bg-slate-50 disabled:opacity-40" disabled>◀ Précédent</button>
+      <div id="pageInfo" class="text-sm text-slate-600"></div>
+      <button id="nextBtn" class="pill bg-white hover:bg-slate-50 disabled:opacity-40" disabled>Suivant ▶</button>
+    </div>
+  </main>
+
+  <footer class="border-t border-slate-200">
+    <div class="max-w-4xl mx-auto px-5 py-8 text-center text-sm text-slate-500">
+      © AutoDeal — prototype démo. Données issues de dumps CSV/JSONL.
+    </div>
+  </footer>
+
+  <script>
+    // ================== Switch debug (met à true pour afficher les URLs images trouvées sur chaque carte) ==================
+    const IMG_DEBUG = false;          // <- passe à true pour inspecter
+    const IMG_PROXY_BASE = "";        // ex: "/img?u=" si tu mets un petit proxy côté backend (facultatif)
+
+    // ================== Constantes ==================
+    const NEGATIVE_FLAGS = {
+      has_export:"Export",has_ct_fail:"CT refusé",has_accident:"Accident",has_damage:"Dégâts",
+      has_engine_issue:"Moteur",has_gearbox_issue:"Boîte",has_non_rolling:"Non roulant",
+      has_rust:"Rouille",has_oil_consumption:"Conso huile",has_noise_smoke:"Bruit/Fumée",
+      has_km_not_guaranteed:"KM non garantis",
+    };
+    const POSITIVE_FLAGS = {
+      has_ct_ok:"CT ok",has_carpass:"Carpass",has_maintenance_history:"Entretien suivi",
+      has_first_owner:"1er propriétaire",has_non_smoker:"Non-fumeur",has_warranty:"Garantie",
+      has_no_costs:"Aucun frais",runs_perfect:"Roule bien",
+    };
+    const PAGE_SIZE = 12;
+
+    // ================== Utils ==================
+    const $ = (id)=>document.getElementById(id);
+    const money = (v)=> Number.isFinite(+v)? (+v).toLocaleString("fr-FR",{maximumFractionDigits:0})+" €" : "—";
+    const safeInt = (v)=> Number.isFinite(+v)? (+v).toLocaleString("fr-FR") : "";
+    const cleanDesc = (s, max=420)=> {
+      s=(s??"").toString().trim().replace(/https?:\/\/\S+/g,"").replace(/\s+/g," ");
+      return s.length>max ? s.slice(0,max)+"…" : s;
+    };
+    const toList = (x)=>{
+      if (Array.isArray(x)) return x.map(t=>String(t??"").trim()).filter(Boolean);
+      const s=String(x??"").trim();
+      return s ? (s.includes("|")? s.split("|"): s.includes(";")? s.split(";"):[s]).map(t=>t.trim()).filter(Boolean) : [];
+    };
+    const decodeEntities = (s)=>{
+      if (typeof s!=='string') return s;
+      const txt = document.createElement("textarea");
+      txt.innerHTML = s;
+      return txt.value;
+    };
+    const stripQuotes = (s)=> s.replace(/^["'\s]+|["'\s]+$/g, "");
+    const unescapeSlashes = (s)=> s.replace(/\\\//g,"/").replace(/\\\\/g,"\\").replace(/\\"/g,'"').replace(/\\n/g,' ').replace(/\\r/g,' ');
+    function withBuster(u){
+    if (!u) return u;
+    const sep = u.includes('?') ? '&' : '?';
+    return `${u}${sep}v=${Date.now()}`;
+    }
+
+    // Normalise en-têtes CSV → minuscules/sans accents/underscores
+    function normalizeHeader(h){
+      return String(h||"").trim().toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+        .replace(/\s+/g,"_");
+    }
+    // Coercition numérique tolérante
+    function toNumberLoose(v){
+      if (v==null || v==="") return null;
+      const s = String(v).replace(/\s/g,"").replace(/\u00A0/g,"").replace(",",".");
+      const n = Number(s);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    // ================== Images (ultra robuste) ==================
+    function mapViaProxy(u){
+      if (!IMG_PROXY_BASE) return u;
+      try {
+        const enc = encodeURIComponent(u);
+        return IMG_PROXY_BASE + enc;
+      } catch { return u; }
+    }
+
+    function getImages(obj){
+      const out = new Set();
+      const isStr = v => typeof v === "string" && v.trim().length > 0;
+
+      const toHttps = u => u?.startsWith("//") ? ("https:" + u) : u;
+
+      const cleanUrl = (u) => {
+        if (!isStr(u)) return null;
+        let s = stripQuotes(unescapeSlashes(decodeEntities(u.trim())));
+        s = toHttps(s);
+        // supprime triple slash
+        s = s.replace(/^https?:\/\/\/+/, m => m.replace(/\/+$/, "//"));
+        return s;
+      };
+
+      const validImageLike = (u) => {
+        if (!isStr(u)) return false;
+        if (/^data:image\//i.test(u)) return true;
+        if (!/^https?:\/\//i.test(u) && !u.startsWith("//")) return false;
+        return /\.(webp|jpg|jpeg|png|gif)(\?|#|$)/i.test(u)
+               || /\/image(s)?\//i.test(u) || /cdn|media|photos?|thumbnails?/i.test(u);
+      };
+
+      const tryJSON = (s) => {
+        if (!isStr(s)) return [];
+        const t0 = s.trim();
+        const candidates = [t0, t0.replace(/'/g,'"'), unescapeSlashes(t0)];
+        for (const t of candidates){
+          if (!((t.startsWith("[") && t.endsWith("]")) || (t.startsWith("{") && t.endsWith("}")))) continue;
+          try { const x=JSON.parse(t); return Array.isArray(x)? x : Object.values(x); } catch{}
+        }
+        return [];
+      };
+
+      const extractUrls = (s) => {
+        if (!isStr(s)) return [];
+        const urls = [];
+        // liens “nus”
+        const re = /(https?:\/\/[^\s"'<>()]+|\B\/\/[^\s"'<>()]+)/g;
+        let m; while ((m = re.exec(s)) !== null) urls.push(m[0]);
+        // srcset: "url 1x, url2 2x"
+        s.split(",").forEach(tok=>{
+          const p = tok.trim().split(/\s+/)[0];
+          if (/^https?:\/\//.test(p) || p.startsWith("//")) urls.push(p);
+        });
+        return urls;
+      };
+
+      const pushAny = (v) => {
+        if (!v) return;
+        if (Array.isArray(v)) { v.forEach(it => pushAny(it)); return; }
+        if (typeof v === "object") { Object.values(v).forEach(pushAny); return; }
+        if (!isStr(v)) return;
+
+        // JSON sérialisé ?
+        const parsed = tryJSON(v);
+        if (parsed && parsed.length) { pushAny(parsed); return; }
+
+        // Unique URL ?
+        const cleaned = cleanUrl(v);
+        if (validImageLike(cleaned)) { out.add(cleaned); return; }
+
+        // Listes textuelles
+        const candidates = (v.includes("|") || v.includes(";") || v.includes(",")) ? v.split(/[|;,]/) : [v];
+        candidates.forEach(c => extractUrls(c).forEach(u => {
+          const cu = cleanUrl(u);
+          if (validImageLike(cu)) out.add(cu);
+        }));
+      };
+
+      // 1) champs usuels + numérotés image0..image20
+      const candidates = [
+        obj.images,obj.image_urls,obj.photo_urls,obj.photos,obj.pictures,obj.pics,obj.thumbnails,
+        obj.media,obj.gallery,obj.srcset,obj.src_set,obj.src,obj.cover,obj.cover_url,obj.first_image_url,
+        obj.image,obj.img,obj.img_url,obj.img_urls
+      ];
+      for (let i=0;i<25;i++){
+        candidates.push(obj["image"+i], obj["img"+i], obj["photo"+i], obj["thumb"+i]);
+      }
+      candidates.forEach(v => pushAny(v));
+
+      // 2) toutes les clés “image-like”
+      for (const [k, v] of Object.entries(obj)) {
+        if (!v) continue;
+        const key = k.toLowerCase();
+        if (/(img|image|photo|pic|thumb|url|media|srcset|src)/.test(key)) pushAny(v);
+      }
+
+      // 3) balayage global si rien
+      if (!out.size) {
+        for (const v of Object.values(obj)) if (isStr(v)) {
+          extractUrls(v).forEach(u => { const cu=cleanUrl(u); if (validImageLike(cu)) out.add(cu); });
+        }
+      }
+
+      // Validation & dédup
+      const final = [];
+      for (const u of out) { try { new URL(toHttps(u)); final.push(u); } catch{} }
+      const dedup = Array.from(new Set(final.map(u => u.replace(/#.*$/, ""))));
+
+      // Proxy optionnel
+      return dedup.map(mapViaProxy);
+    }
+
+    // Fallback d’image progressif
+    window.__imgFallback = function(el){
+      if (!el || !el.src) return;
+      const tried = el.getAttribute("data-tries")|0;
+
+      if (tried === 0) {
+        el.setAttribute("data-tries","1");
+        const noQuery = el.src.replace(/\?.*$/, "");
+        if (noQuery !== el.src) { el.src = noQuery; return; }
+      }
+      if (tried <= 1) {
+        el.setAttribute("data-tries","2");
+        if (el.src.startsWith("//")) { el.src = "https:" + el.src; return; }
+        if (el.src.startsWith("http://")) { el.src = el.src.replace(/^http:\/\//,"https://"); return; }
+      }
+
+      if (el.classList.contains("thumb")) {
+        el.style.display = "none";
+      } else {
+        const wrapper = el.closest(".img-skeleton");
+        if (wrapper) wrapper.classList.add("img-skeleton");
+        el.alt = "Image indisponible";
+      }
+    };
+
+    // ================== Décision deal ==================
+    function decide(dp){
+      if (dp==null || !Number.isFinite(+dp)) return ["À considérer","gray"];
+      const pct = +dp*100;
+      if (pct>=25) return ["Great deal","green"];
+      if (pct>=10) return ["Good deal","amber"];
+      if (pct<-5)  return ["Overpriced","red"];
+      return ["Fair","gray"];
+    }
+
+    // ================== État global ==================
+    let SOURCES=[]; // {label, path}
+    let RAW=[];     // lignes CSV
+    let DATA=[];    // lignes enrichies
+    let VIEW=[];    // filtrées/triées
+    let PAGE=1;
+
+    const sourceSelect=$("sourceSelect");
+    const sortSelect=$("sortSelect");
+    const orderSelect=$("orderSelect");
+    const idsBounds=["priceMin","priceMax","kmMin","kmMax","yearMin","yearMax"];
+
+    // ================== Wiring ==================
+    $("prevBtn").addEventListener("click", ()=>{ PAGE=Math.max(1,PAGE-1); render(); });
+    $("nextBtn").addEventListener("click", ()=>{ PAGE+=1; render(); });
+    $("resetBtn").addEventListener("click", resetFilters);
+    sortSelect.addEventListener("change", applyFilters);
+    orderSelect.addEventListener("change", applyFilters);
+    idsBounds.forEach(id => $(id).addEventListener("input", applyFilters));
+    sourceSelect.addEventListener("change", async ()=>{ await loadSelectedSource(); });
+
+    // ================== Manifest/sources ==================
+    async function fetchJSON(url){
+      const r = await fetch(url, {cache:"no-store"});
+      if (!r.ok) throw new Error(`${url} non accessible (${r.status})`);
+      return r.json();
+    }
+    async function loadManifest(){
+      try {
+        const manifest = await fetchJSON(withBuster("./manifest.json"));
+        SOURCES = manifest.sources || [];
+        sourceSelect.innerHTML = SOURCES.map((s,i)=>`<option value="${i}">${s.label}</option>`).join("");
+        if (!SOURCES.length){
+          $("resultInfo").textContent = "Aucune source trouvée. Génère manifest.json puis recharge.";
+          return;
+        }
+        sourceSelect.value = 0;
+        await loadSelectedSource();
+      } catch (err) {
+        $("resultInfo").textContent = "Impossible de charger manifest.json (même origine ?)";
+        console.error(err);
+      }
+    }
+
+    // ================== Lecture CSV robuste ==================
+    function parseWithDelimiter(path, delimiter){
+      return new Promise((resolve,reject)=>{
+        Papa.parse(path, {
+          header: true, download: true, skipEmptyLines: true,
+          dynamicTyping: false, delimiter,
+          transformHeader: normalizeHeader,
+          complete: (res)=> resolve(res),
+          error: (err)=> reject(err)
+        });
+      });
+    }
+    async function loadCSV(path){
+      let out = await new Promise((resolve,reject)=>{
+        Papa.parse(path, {
+          header: true, download: true, skipEmptyLines: true, dynamicTyping: false,
+          transformHeader: normalizeHeader,
+          complete: (res)=> resolve(res),
+          error: (err)=> reject(err)
+        });
+      });
+      // Fallback sur ; puis ,
+      const cols = out.meta?.fields?.length || 0;
+      if (cols <= 1) {
+        out = await parseWithDelimiter(path, ";");
+        if ((out.meta?.fields?.length || 0) <= 1) {
+          out = await parseWithDelimiter(path, ",");
+        }
+      }
+      return out.data;
+    }
+
+    async function loadSelectedSource(){
+      const idx=+sourceSelect.value;
+      const src=SOURCES[idx]; if(!src) return;
+      RAW = await loadCSV(withBuster(src.path));
+      DATA = enrich(RAW);
+      seedFilterBounds(DATA);
+      applyFilters();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    // ================== Enrichissement & filtres ==================
+    function enrich(rows){
+      return rows.map(r=>{
+        const row={...r};
+        const cols=["url","make","model","year","mileage_km","fuel","transmission","doors",
+          "power_kw","power_hp","co2_gkm","seller_rating","price_eur",
+          "pred_price_fair","pred_price_lo","pred_price_hi",
+          "deal_label","description","engine_liters","euro_norm",
+          "body_type","color","options",
+          // images possibles
+          "images","image_urls","photos","pictures","pics","thumbnails","media","gallery","srcset","src_set","src",
+          "cover_url","image","img","img_url","img_urls","first_image_url"
+        ];
+        cols.forEach(c=>{ if(!(c in row)) row[c]=null; });
+
+        const num=["year","mileage_km","power_kw","power_hp","co2_gkm","doors","seller_rating",
+          "engine_liters","price_eur","pred_price_fair","pred_price_lo","pred_price_hi"];
+        num.forEach(c=>{ row[c]=toNumberLoose(row[c]); });
+
+        for (const f of [...Object.keys(NEGATIVE_FLAGS), ...Object.keys(POSITIVE_FLAGS)]) {
+          row[f] = toNumberLoose(row[f]) ?? 0;
+        }
+
+        const fair=row.pred_price_fair, price=row.price_eur;
+        const disc=(fair && price!=null) ? (fair-price) : null;
+        row.discount_eur=disc;
+        row.discount_pct=(disc!=null && fair) ? (disc/fair) : null;
+
+        const [lbl,cls]=decide(row.discount_pct);
+        row.decision_label=row.decision_label||lbl;
+        row.decision_class=row.decision_class||cls;
+
+        row.options_list=toList(row.options);
+        row._images=getImages(row);
+        row._img_count=row._images.length;
+        return row;
+      });
+    }
+
+    function robustMinMax(arr,col,defMin,defMax){
+      const vals=arr.map(r=>+r[col]).filter(Number.isFinite);
+      if(!vals.length) return [defMin,defMax];
+      return [Math.floor(Math.min(...vals)), Math.ceil(Math.max(...vals))];
+    }
+    function seedFilterBounds(data){
+      const [pmin,pmax]=robustMinMax(data,"price_eur",0,100000);
+      const [ymin,ymax]=robustMinMax(data,"year",1995,2030);
+      const [kmin,kmax]=robustMinMax(data,"mileage_km",0,400000);
+      $("priceMin").placeholder=pmin; $("priceMax").placeholder=pmax;
+      $("yearMin").placeholder=ymin; $("yearMax").placeholder=ymax;
+      $("kmMin").placeholder=kmin;   $("kmMax").placeholder=kmax;
+    }
+
+    function currentFilters(){
+      return {
+        priceMin:+$("priceMin").value || -Infinity,
+        priceMax:+$("priceMax").value || +Infinity,
+        kmMin:+$("kmMin").value || -Infinity,
+        kmMax:+$("kmMax").value || +Infinity,
+        yearMin:+$("yearMin").value || -Infinity,
+        yearMax:+$("yearMax").value || +Infinity,
+        sort:$("sortSelect").value,
+        asc:$("orderSelect").value==="asc",
+      };
+    }
+
+    function resetFilters(){
+      idsBounds.forEach(id => { $(id).value=""; });
+      sortSelect.value = "Remise (%)";
+      orderSelect.value = "desc";
+      applyFilters();
+    }
+
+    function applyFilters(){
+      const f=currentFilters();
+      let d=DATA.filter(r=>{
+        const p=+r.price_eur, y=+r.year, k=+r.mileage_km;
+        const okP=Number.isFinite(p)? (p>=f.priceMin && p<=f.priceMax) : true;
+        const okY=Number.isFinite(y)? (y>=f.yearMin && y<=f.yearMax) : true;
+        const okK=Number.isFinite(k)? (k>=f.kmMin   && k<=f.kmMax)   : true;
+        return okP && okY && okK;
+      });
+
+      let col="discount_pct";
+      if (f.sort==="Remise (€)") col="discount_eur";
+      else if (f.sort==="Prix (€)") col="price_eur";
+      else if (f.sort==="Année") col="year";
+      else if (f.sort==="Kilométrage") col="mileage_km";
+      else if (f.sort==="Prix juste (€)") col="pred_price_fair";
+
+      d.sort((a,b)=>{
+        const A=(a[col]??Number.NEGATIVE_INFINITY);
+        const B=(b[col]??Number.NEGATIVE_INFINITY);
+        if (!Number.isFinite(A) && !Number.isFinite(B)) return 0;
+        if (!Number.isFinite(A)) return 1;
+        if (!Number.isFinite(B)) return -1;
+        return f.asc ? (A-B) : (B-A);
+      });
+
+      VIEW=d;
+      PAGE=1;
+      render();
+    }
+
+    // ================== Rendu ==================
+    function badge(label,cls){ return `<span class="badge ${cls}"><span class="dot"></span>${label}</span>`; }
+
+    function tags(row, maxEach=3){
+      const negs=[], poss=[];
+      for (const [k,l] of Object.entries(NEGATIVE_FLAGS)) if (+row[k]===1) negs.push(l);
+      for (const [k,l] of Object.entries(POSITIVE_FLAGS)) if (+row[k]===1) poss.push(l);
+      return [
+        ...negs.slice(0,maxEach).map(t=>`<span class="inline-flex items-center pill bg-white">${t}</span>`),
+        ...poss.slice(0,maxEach).map(t=>`<span class="inline-flex items-center pill" style="background:#f0fdf4;border-color:#bbf7d0">${t}</span>`),
+      ].join("");
+    }
+
+    function kpiPairs(row){
+      const prix=money(row.price_eur);
+      const juste=money(row.pred_price_fair);
+      const pct=(row.discount_pct!=null && Number.isFinite(+row.discount_pct)) ? (row.discount_pct*100).toFixed(1)+"%" : "—";
+      const note=(row.seller_rating!=null && Number.isFinite(+row.seller_rating)) ? (+row.seller_rating).toFixed(1)+"/5" : "—";
+      return `
+        <div class="pairs">
+          <div class="kcell"><div class="text-xs text-slate-600 mb-1">Prix affiché</div><div class="text-xl font-extrabold">${prix}</div></div>
+          <div class="kcell"><div class="text-xs text-slate-600 mb-1">Prix juste</div><div class="text-xl font-extrabold">${juste}</div></div>
+          <div class="kcell"><div class="text-xs text-slate-600 mb-1">Remise vs juste</div><div class="text-xl font-extrabold">${pct}</div></div>
+          <div class="kcell"><div class="text-xs text-slate-600 mb-1">Note vendeur</div><div class="text-xl font-extrabold">${note}</div></div>
+        </div>
+      `;
+    }
+
+    function infoGrid(row){
+      const km   = safeInt(row.mileage_km);
+      const cyl  = Number.isFinite(+row.engine_liters) ? `${(+row.engine_liters).toFixed(1)} L` : "";
+      const carb = row.fuel ?? "";
+      const trans= row.transmission ?? "";
+      const euro = row.euro_norm ?? "";
+      const co2  = safeInt(row.co2_gkm);
+      const hp   = safeInt(row.power_hp);
+      const doors= safeInt(row.doors);
+      const body = (row.body_type ?? "") || (row.color ?? "");
+      const cells=[];
+      if (km)   cells.push(["Kilométrage", km]);
+      if (cyl)  cells.push(["Cylindrée", cyl]);
+      if (carb) cells.push(["Carburant", carb]);
+      if (trans)cells.push(["Transmission", trans]);
+      if (euro) cells.push(["Euronorm", euro]);
+      if (co2)  cells.push(["CO₂ (g/km)", co2]);
+      if (hp)   cells.push(["Puissance (hp)", hp]);
+      if (doors)cells.push(["Portes", doors]);
+      if (body) cells.push(["Carrosserie/Couleur", body]);
+      if (!cells.length) return "";
+      return `
+        <div class="grid-3x3">
+          ${cells.map(([l,v])=>`
+            <div class="kcell bg-white">
+              <div class="text-xs text-slate-600 mb-1">${l}</div>
+              <div class="font-extrabold">${v}</div>
+            </div>`).join("")}
+        </div>
+      `;
+    }
+
+    function galleryHTML(imgs = [], gid) {
+      const list = Array.from(new Set((imgs || []).filter(Boolean)));
+      if (list.length === 0) {
+        return `
+          <div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50 h-52
+                      flex items-center justify-center text-slate-400">
+            Aucune image
+          </div>`;
+      }
+      const cover = list[0];
+      return `
+        <div class="space-y-3">
+          <div class="relative w-full">
+            <div style="aspect-ratio:16/9"
+                 class="w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 img-skeleton">
+              <img id="${gid}_cover"
+                   class="img-cover h-full w-full object-cover"
+                   loading="lazy"
+                   referrerpolicy="no-referrer"
+                   alt="photo de l'annonce"
+                   src="${cover}"
+                   onload="this.closest('div')?.classList.remove('img-skeleton')"
+                   onerror="window.__imgFallback(this)" />
+            </div>
+          </div>
+
+          ${
+            list.length > 1
+            ? `
+              <div class="flex gap-2 overflow-x-auto py-1">
+                ${list.slice(0, 12).map((u, i) => `
+                  <img class="thumb ${i === 0 ? 'active' : ''}"
+                       src="${u}"
+                       loading="lazy"
+                       referrerpolicy="no-referrer"
+                       alt="miniature ${i + 1}"
+                       onclick="swapCover('${gid}','${u}',this)"
+                       onerror="window.__imgFallback(this)" />
+                `).join('')}
+              </div>`
+            : ``
+          }
+        </div>
+      `;
+    }
+
+    // Swap d’image
+    window.swapCover = (gid, url, el) => {
+      const img = document.getElementById(gid+"_cover");
+      if (img) { img.src = url; img.closest('div')?.classList.remove('img-skeleton'); }
+      const parent = el?.parentElement;
+      if (parent){ [...parent.querySelectorAll(".thumb")].forEach(t => t.classList.remove("active")); }
+      el?.classList.add("active");
+    };
+
+    function card(row, idxAbs){
+      const title = [row.make?.toString().trim(), row.model?.toString().trim(), Number.isFinite(+row.year)? String(+row.year) : ""]
+        .filter(Boolean).join(" ") || "Annonce";
+      const desc = cleanDesc(row.description || "", 420);
+      const lo=row.pred_price_lo, hi=row.pred_price_hi, fair=row.pred_price_fair, price=row.price_eur;
+      let expl="";
+      if (Number.isFinite(+price) && Number.isFinite(+fair)){
+        expl = `Listé <strong>${money(price)}</strong> vs prix juste <strong>${money(fair)}</strong>.`;
+        if (Number.isFinite(+lo) && Number.isFinite(+hi)) expl += ` Intervalle attendu : [${money(lo)} – ${money(hi)}].`;
+        if (row.discount_pct!=null && Number.isFinite(+row.discount_pct)){
+          const d = +row.discount_pct*100;
+          expl += d>=0 ? ` ≈ <strong>${d.toFixed(1)}%</strong> sous le juste prix.` : ` ≈ <strong>${Math.abs(d).toFixed(1)}%</strong> au-dessus du juste prix.`;
+        }
+      }
+      const url = (row.url ?? "").toString();
+      const imgs = row._images || [];
+      const gid = "g_"+idxAbs;
+
+      const debugBlock = (IMG_DEBUG && imgs.length)
+        ? `<details class="mt-2 text-xs text-slate-600"><summary class="underline">Debug images (${imgs.length})</summary><div class="mt-1 break-all">${imgs.map(u=>`<div class="truncate">${u}</div>`).join("")}</div></details>`
+        : (IMG_DEBUG ? `<div class="mt-2 text-xs text-rose-600">Aucune image détectée pour cette ligne.</div>` : ``);
+
+      return `
+        <article class="card p-5">
+          <div class="flex items-start justify-between gap-2 mb-4">
+            <div>
+              <h3 class="text-xl font-extrabold tracking-tight">${title}</h3>
+              ${desc ? `<p class="text-sm text-slate-700 mt-1">${desc}</p>` : ``}
+            </div>
+            ${badge(row.decision_label, row.decision_class)}
+          </div>
+
+          ${imgs.length ? `${galleryHTML(imgs, gid)}` : `
+            <div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50 h-52 flex items-center justify-center text-slate-400">
+              Aucune image
+            </div>`}
+
+          <div class="mt-6 space-y-5">
+            ${kpiPairs(row)}
+            ${infoGrid(row)}
+            ${expl ? `<p class="text-sm">${expl}</p>` : ``}
+            ${tags(row) ? `<div class="mt-1 flex flex-wrap gap-2">${tags(row)}</div>` : ``}
+            ${url && url.startsWith("http") ? `
+              <div class="pt-2">
+                <a class="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white font-extrabold hover:bg-slate-50"
+                   href="${url}" target="_blank" rel="noopener">Voir l’annonce</a>
+              </div>` : ``}
+            ${debugBlock}
+          </div>
+        </article>
+      `;
+    }
+
+    function render(){
+      const info = $("resultInfo");
+      info.textContent = `${VIEW.length} annonce(s) trouvée(s)`;
+
+      const total = VIEW.length;
+      const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      PAGE = Math.min(Math.max(1,PAGE), totalPages);
+      const start = (PAGE-1)*PAGE_SIZE;
+      const slice = VIEW.slice(start, start+PAGE_SIZE);
+
+      $("cards").innerHTML = slice.map((row,i)=>card(row, start+i)).join("");
+      $("prevBtn").disabled = PAGE<=1;
+      $("nextBtn").disabled = PAGE>=totalPages;
+      $("pageInfo").textContent = `Page ${PAGE} / ${totalPages}`;
+    }
+
+    // ================== Boot ==================
+    window.addEventListener("DOMContentLoaded", loadManifest);
+  </script>
+</body>
+</html>
++
