@@ -9,25 +9,52 @@ Compatibilité:
 - Nouveau format (journal d'événements append-only):
     {"ts": "...", "action": "add|update|delete", "alert": {"url": "...", "email": "...", "label": "...", "pages": 2}}
 
-Le script reconstruit l'état courant en rejouant les événements, en dédupliquant par URL canonique.
+Le script fait un 'git pull' au démarrage (détection robuste du repo via git rev-parse),
+puis lit le JSONL et exécute core.run_once().
 """
 
-import argparse, json, logging, os, sys
-from typing import Dict, List, Tuple, Optional
+import argparse, json, logging, os, sys, subprocess
+from typing import Dict, List, Tuple
 
 # Import du cœur métier (doit fournir run_once(url, email, pages), setup_logging())
 import alertme_immoweb as core  # type: ignore
 
+# ---------------------- Git sync (robuste) ----------------------
+def git_find_toplevel(start_dir: str) -> str | None:
+    """Retourne le toplevel git en utilisant 'git rev-parse --show-toplevel', sinon None."""
+    try:
+        cp = subprocess.run(
+            ["git", "-C", start_dir, "rev-parse", "--show-toplevel"],
+            check=True, capture_output=True, text=True
+        )
+        root = (cp.stdout or "").strip()
+        return root or None
+    except Exception:
+        return None
+
+def git_pull_repo(start_dir: str) -> None:
+    """Fait fetch + pull --ff-only sur le toplevel git si détecté. Ne plante pas si git absent."""
+    top = git_find_toplevel(start_dir)
+    if not top:
+        logging.info("Git: repo non détecté (ni .git dir, ni rev-parse). Skip pull.")
+        return
+    try:
+        logging.info("Git: pull début sur %s ...", top)
+        subprocess.run(["git", "-C", top, "fetch", "--all"], check=True)
+        subprocess.run(["git", "-C", top, "pull", "--ff-only"], check=True)
+        logging.info("Git: pull ok.")
+    except FileNotFoundError:
+        logging.warning("Git: binaire 'git' introuvable dans le PATH. Skip pull.")
+    except subprocess.CalledProcessError as e:
+        logging.error("Git: pull a échoué (code %s). On continue avec l'état local.", e.returncode)
 
 # ---------------------- Canonicalisation URL ----------------------
 def _fallback_canonicalize(url: str) -> str:
-    """Fallback très simple si core.canonicalize_immoweb_url n'existe pas."""
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
     url = (url or "").strip()
     if not url:
         return url
-    # Supprime le paramètre page et force orderBy=newest si présent
     try:
-        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
         u = urlparse(url)
         q = parse_qs(u.query)
         q.pop("page", None)
@@ -47,15 +74,8 @@ def canonicalize(url: str) -> str:
             return _fallback_canonicalize(url)
     return _fallback_canonicalize(url)
 
-
 # ---------------------- Lecture & réduction du JSONL ----------------------
 def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]:
-    """
-    Rejoue le journal JSONL -> état courant.
-    - Ancien format (pas de 'action'): traité comme add.
-    - Nouveau format: add/update posent/écrasent l'entrée ; delete la retire.
-    - Déduplication par URL canonique.
-    """
     state: Dict[str, dict] = {}
 
     for i, row in enumerate(lines, 1):
@@ -63,7 +83,7 @@ def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]
             logging.warning("Ligne %d: entrée non-JSON objet -> ignorée.", i)
             continue
 
-        # Ancien format: {"url","email","pages"?}
+        # Ancien format
         if "action" not in row or "alert" not in row:
             url = (row.get("url") or "").strip()
             email = (row.get("email") or "").strip()
@@ -75,7 +95,7 @@ def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]
             state[key] = {"url": key, "email": email, "pages": pages}
             continue
 
-        # Nouveau format (événement)
+        # Nouveau format (événements)
         action = (row.get("action") or "").strip().lower()
         alert = row.get("alert") or {}
         if action not in {"add", "update", "delete"}:
@@ -95,18 +115,22 @@ def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]
             pages = int(alert.get("pages", default_pages) or default_pages)
             state[key] = {"url": key, "email": email, "pages": pages}
         elif action == "delete":
-            # delete peut ne contenir que {url}
-            if not key:
+            if key:
+                state.pop(key, None)
+            else:
                 logging.warning("Ligne %d: delete sans URL -> ignorée.", i)
-                continue
-            state.pop(key, None)
 
     return list(state.values())
 
-
 def read_jsonl_effective_items(path: str, default_pages: int) -> List[dict]:
-    """Lit le fichier JSONL (ancien + journal d'événements) et renvoie la liste finale des alertes à exécuter."""
     raw: List[dict] = []
+    # log pour diagnostiquer “rien dans le jsonl”
+    try:
+        size = os.path.getsize(path)
+        logging.info("Lecture '%s' (taille %d octets)...", path, size)
+    except OSError:
+        logging.info("Lecture '%s'...", path)
+
     with open(path, "r", encoding="utf-8") as f:
         for i, line in enumerate(f, 1):
             line = line.strip()
@@ -116,8 +140,11 @@ def read_jsonl_effective_items(path: str, default_pages: int) -> List[dict]:
                 raw.append(json.loads(line))
             except json.JSONDecodeError as e:
                 logging.error("Ligne %d: JSON invalide (%s) -> ignorée.", i, e)
+
+    logging.info("Lignes JSON valides lues: %d", len(raw))
     items = _reduce_events_to_items(raw, default_pages)
-    # Filtre final: prudence si un enregistrement corrompu subsiste
+    logging.info("Alertes effectives après réduction: %d", len(items))
+
     out: List[dict] = []
     for it in items:
         url = (it.get("url") or "").strip()
@@ -129,14 +156,18 @@ def read_jsonl_effective_items(path: str, default_pages: int) -> List[dict]:
             logging.warning("Enregistrement incomplet (url/email manquant) -> ignoré: %r", it)
     return out
 
-
 # ---------------------- Main ----------------------
 def main():
     if hasattr(core, "setup_logging"):
-        core.setup_logging()  # unifie le format des logs
+        core.setup_logging()
     else:
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s")
 
+    # 1) Git pull au démarrage (robuste, gère worktrees et sous-dossiers)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    git_pull_repo(script_dir)
+
+    # 2) Args
     ap = argparse.ArgumentParser(description="Batch runner pour AlertMe Immoweb (URL ↔ email)")
     ap.add_argument("--config", required=True, help="Fichier JSONL (ancien format OU journal d'événements)")
     ap.add_argument("--default-pages", type=int, default=2, help="Nombre de pages par défaut si non spécifié")
@@ -147,6 +178,7 @@ def main():
         logging.error("Fichier de config introuvable: %s", args.config)
         sys.exit(1)
 
+    # 3) Lecture + exécution
     alerts = read_jsonl_effective_items(args.config, args.default_pages)
     if not alerts:
         logging.warning("Aucune alerte exploitable dans %s.", args.config)
