@@ -1,5 +1,5 @@
 # streamlit_app.py
-import os, json, re
+import os, json, re, base64, time, requests
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import streamlit as st
 
@@ -11,10 +11,10 @@ DEFAULT_CONFIG = {
     "dedupe_by_canonical_url": True,
     "ui": {
         "title": "AlertMe – Gestion des alertes Immoweb",
-        "subtitle": "Ajoutez une alerte (URL + e-mail). Le moteur tourne en arrière-plan.",
+        "subtitle": "Ajoutez une alerte (URL + e-mail). Les données sont stockées dans GitHub (fallback local en dev).",
         "show_labels": True
     },
-    "scraper_defaults": {  # purement informatif côté UI
+    "scraper_defaults": {
         "pages": 2,
         "order_keys": ["newest", "most_recent"],
         "path_aliases": ["/fr/recherche/", "/fr/recherche-avancee/"],
@@ -29,7 +29,6 @@ def load_config():
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             cfg = json.load(f)
-            # légère fusion au cas où des clés manquent
             def deep_merge(a, b):
                 if isinstance(a, dict) and isinstance(b, dict):
                     out = dict(a)
@@ -56,47 +55,111 @@ def canonicalize_immoweb_url(user_url: str) -> str:
     if IMMOWEB_HOST not in u.netloc:
         raise ValueError("Ce n'est pas une URL Immoweb.")
     q = parse_qs(u.query)
-    # force tri "plus récent" (newest prioritaire)
-    q["orderBy"] = [ORDER_KEYS[0] if ORDER_KEYS else "newest"]
-    # supprime la pagination pour stocker une clé canonique stable
-    q.pop("page", None)
+    q["orderBy"] = [ORDER_KEYS[0] if ORDER_KEYS else "newest"]  # force tri le plus récent
+    q.pop("page", None)  # URL canonique sans pagination
     new_q = urlencode({k: v[0] for k, v in q.items()})
     return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
 
 def is_valid_email(s: str) -> bool:
     return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", s.strip()))
 
-def load_alerts(path: str):
-    if not os.path.isfile(path):
+# ---------- Stockage GitHub (prod) + fallback local ----------
+def _gh_token():
+    return st.secrets.get("GH_TOKEN") or os.getenv("GH_TOKEN")
+
+def _gh_repo_cfg():
+    repo   = st.secrets.get("GH_REPO", os.getenv("GH_REPO", "ParraLuca/AlertMe"))
+    path   = st.secrets.get("GH_PATH", os.getenv("GH_PATH", "alerts.jsonl"))
+    branch = st.secrets.get("GH_BRANCH", os.getenv("GH_BRANCH", "main"))
+    return repo, path, branch
+
+def _gh_headers():
+    tok = _gh_token()
+    if not tok:
+        raise RuntimeError("GH_TOKEN manquant.")
+    return {
+        "Authorization": f"token {tok}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+def gh_get_file():
+    repo, path, branch = _gh_repo_cfg()
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    r = requests.get(url, headers=_gh_headers(), params={"ref": branch})
+    if r.status_code == 404:
+        return None, None
+    r.raise_for_status()
+    data = r.json()
+    content = base64.b64decode(data["content"]).decode("utf-8")
+    sha = data["sha"]
+    return content, sha
+
+def gh_put_file(text: str, message: str):
+    repo, path, branch = _gh_repo_cfg()
+    # relire sha courant pour éviter les conflits
+    current, sha = gh_get_file()
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    payload = {
+        "message": message,
+        "content": base64.b64encode(text.encode("utf-8")).decode("ascii"),
+        "branch": branch,
+    }
+    if sha:
+        payload["sha"] = sha
+    r = requests.put(url, headers=_gh_headers(), json=payload)
+    r.raise_for_status()
+    return r.json()
+
+def load_alerts():
+    """Lit alerts.jsonl depuis GitHub si GH_TOKEN est présent, sinon local."""
+    if _gh_token():
+        try:
+            content, _ = gh_get_file()
+            if not content:
+                return []
+            return [json.loads(l) for l in content.splitlines() if l.strip()]
+        except Exception as e:
+            st.error(f"Lecture GitHub échouée: {e}")
+            return []
+    # Fallback local
+    if not os.path.isfile(ALERTS_PATH):
         return []
     out = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(ALERTS_PATH, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line: 
                 continue
             try:
                 obj = json.loads(line)
-                # normalise le schéma
                 url = obj.get("url", "").strip()
                 email = obj.get("email", "").strip()
                 label = obj.get("label", "").strip() if SHOW_LABELS else ""
                 if url and email:
                     out.append({"url": url, "email": email, **({"label": label} if SHOW_LABELS else {})})
             except json.JSONDecodeError:
-                # ignorer les lignes cassées
                 pass
     return out
 
-def save_alerts(path: str, alerts):
-    tmp = path + ".tmp"
+def save_alerts(alerts, commit_message: str):
+    """Écrit alerts.jsonl dans GitHub si possible, sinon local."""
+    text = "\n".join(json.dumps(a, ensure_ascii=False) for a in alerts)
+    if _gh_token():
+        try:
+            return gh_put_file(text + ("\n" if text else ""), commit_message)
+        except Exception as e:
+            st.error(f"Écriture GitHub échouée: {e}")
+            # on ne tombe pas en local en prod, on signale l’erreur
+            return None
+    # Fallback local
+    tmp = ALERTS_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        for a in alerts:
-            f.write(json.dumps(a, ensure_ascii=False) + "\n")
-    os.replace(tmp, path)
+        f.write(text + ("\n" if text else ""))
+    os.replace(tmp, ALERTS_PATH)
+    return True
 
 def dedupe_alerts(alerts):
-    """Déduplication par URL canonique (dernier gagnant)."""
     if not DEDUPE_CANON:
         return alerts
     seen = {}
@@ -114,9 +177,8 @@ st.title("🔔 " + CFG["ui"]["title"])
 st.caption(CFG["ui"]["subtitle"])
 
 if "alerts" not in st.session_state:
-    st.session_state.alerts = dedupe_alerts(load_alerts(ALERTS_PATH))
+    st.session_state.alerts = dedupe_alerts(load_alerts())
 
-# Formulaire simple : URL + e-mail (+ label)
 with st.form("add_alert_form", clear_on_submit=True):
     st.subheader("Ajouter une alerte")
     url_in = st.text_input("URL Immoweb (avec filtres)", placeholder="Collez l’URL depuis Immoweb…")
@@ -135,7 +197,6 @@ with st.form("add_alert_form", clear_on_submit=True):
             try:
                 canon = canonicalize_immoweb_url(url_in.strip())
                 new_alert = {"url": canon, "email": email_in.strip(), **({"label": label_in.strip()} if SHOW_LABELS else {})}
-                # si existe déjà -> mise à jour
                 updated = False
                 for i, a in enumerate(st.session_state.alerts):
                     try:
@@ -144,7 +205,6 @@ with st.form("add_alert_form", clear_on_submit=True):
                             updated = True
                             break
                     except Exception:
-                        # si l'ancienne URL était non canonique, on compare brute
                         if a["url"].strip() == canon:
                             st.session_state.alerts[i] = new_alert
                             updated = True
@@ -153,7 +213,7 @@ with st.form("add_alert_form", clear_on_submit=True):
                     st.session_state.alerts.append(new_alert)
 
                 st.session_state.alerts = dedupe_alerts(st.session_state.alerts)
-                save_alerts(ALERTS_PATH, st.session_state.alerts)
+                save_alerts(st.session_state.alerts, "Add/update alert from Streamlit")
                 st.success("Alerte enregistrée ✅")
             except ValueError as e:
                 st.error(str(e))
@@ -162,7 +222,6 @@ with st.form("add_alert_form", clear_on_submit=True):
 
 st.divider()
 
-# Liste des alertes
 st.subheader("Mes alertes")
 if not st.session_state.alerts:
     st.info("Aucune alerte pour l’instant.")
@@ -184,10 +243,9 @@ else:
                 if st.button("🗑️ Supprimer", key=f"del_{idx}"):
                     st.session_state.alerts = [x for j, x in enumerate(st.session_state.alerts) if j != idx]
                     st.session_state.alerts = dedupe_alerts(st.session_state.alerts)
-                    save_alerts(ALERTS_PATH, st.session_state.alerts)
+                    save_alerts(st.session_state.alerts, "Delete alert from Streamlit")
                     st.rerun()
 
-            # Édition inline minimaliste
             if st.session_state.get(f"edit_mode_{idx}", False):
                 with st.form(f"edit_form_{idx}"):
                     new_email = st.text_input("Email", value=email)
@@ -202,7 +260,7 @@ else:
                                 canon2 = canonicalize_immoweb_url(new_url.strip())
                                 st.session_state.alerts[idx] = {"url": canon2, "email": new_email.strip(), **({"label": new_label.strip()} if SHOW_LABELS else {})}
                                 st.session_state.alerts = dedupe_alerts(st.session_state.alerts)
-                                save_alerts(ALERTS_PATH, st.session_state.alerts)
+                                save_alerts(st.session_state.alerts, "Edit alert from Streamlit")
                                 st.session_state[f"edit_mode_{idx}"] = False
                                 st.success("Alerte mise à jour ✅")
                                 st.rerun()
@@ -212,8 +270,8 @@ else:
 st.divider()
 with st.expander("ℹ️ Aide"):
     st.markdown("""
-- Collez l’URL **Immoweb** avec vos filtres. Le système force automatiquement le tri **le plus récent** et supprime la pagination.
-- Entrez l’**e-mail** destinataire.  
-- Le fichier **alerts.jsonl** est mis à jour à chaque action (1 alerte = 1 ligne JSON).
-- Le moteur batch utilisera `alerts.jsonl` pour exécuter toutes les alertes.
+- Collez l’URL **Immoweb** avec vos filtres (le tri “plus récent” est forcé).
+- Entrez l’**e-mail** destinataire.
+- Les alertes sont **persistées dans GitHub** (`alerts.jsonl`) si un **GH_TOKEN** est configuré.
+- En développement local (sans GH_TOKEN), le fichier `alerts.jsonl` est écrit **en local**.
 """)
