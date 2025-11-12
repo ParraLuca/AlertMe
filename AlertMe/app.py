@@ -6,7 +6,8 @@ import streamlit as st
 # ---------- Chargement config ----------
 CONFIG_PATH = os.path.join(".", "config.json")
 DEFAULT_CONFIG = {
-    "alerts_path": "./alerts.jsonl",
+    # Option B : même chemin en local que dans le repo
+    "alerts_path": "./AlertMe/alerts.jsonl",
     "max_alerts": 200,
     "dedupe_by_canonical_url": True,
     "ui": {
@@ -69,7 +70,8 @@ def _gh_token():
 
 def _gh_repo_cfg():
     repo   = st.secrets.get("GH_REPO", os.getenv("GH_REPO", "ParraLuca/AlertMe"))
-    path   = st.secrets.get("GH_PATH", os.getenv("GH_PATH", "alerts.jsonl"))
+    # Option B : fichier dans le dossier AlertMe du repo
+    path   = st.secrets.get("GH_PATH", os.getenv("GH_PATH", "AlertMe/alerts.jsonl"))
     branch = st.secrets.get("GH_BRANCH", os.getenv("GH_BRANCH", "main"))
     return repo, path, branch
 
@@ -96,9 +98,9 @@ def gh_get_file():
     return content, sha
 
 def gh_put_file(text: str, message: str):
+    """Réécrit complètement le fichier sur GitHub (edit/suppression)."""
     repo, path, branch = _gh_repo_cfg()
-    # relire sha courant pour éviter les conflits
-    current, sha = gh_get_file()
+    _, sha = gh_get_file()  # peut être None si première écriture
     url = f"https://api.github.com/repos/{repo}/contents/{path}"
     payload = {
         "message": message,
@@ -107,6 +109,27 @@ def gh_put_file(text: str, message: str):
     }
     if sha:
         payload["sha"] = sha
+    r = requests.put(url, headers=_gh_headers(), json=payload)
+    r.raise_for_status()
+    return r.json()
+
+def gh_append_line(line_text: str, message: str):
+    """Append 1 JSON line to alerts.jsonl sur GitHub, en préservant le contenu existant."""
+    current, sha = gh_get_file()
+    if current is None:  # fichier n'existe pas encore
+        new_text = line_text + "\n"
+        return gh_put_file(new_text, message)
+    if not current.endswith("\n"):
+        current += "\n"
+    new_text = current + line_text + "\n"
+    repo, path, branch = _gh_repo_cfg()
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    payload = {
+        "message": message,
+        "content": base64.b64encode(new_text.encode("utf-8")).decode("ascii"),
+        "branch": branch,
+        "sha": sha,
+    }
     r = requests.put(url, headers=_gh_headers(), json=payload)
     r.raise_for_status()
     return r.json()
@@ -129,7 +152,7 @@ def load_alerts():
     with open(ALERTS_PATH, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if not line: 
+            if not line:
                 continue
             try:
                 obj = json.loads(line)
@@ -143,20 +166,35 @@ def load_alerts():
     return out
 
 def save_alerts(alerts, commit_message: str):
-    """Écrit alerts.jsonl dans GitHub si possible, sinon local."""
+    """Réécrit toute la liste (utile pour edit/suppression)."""
     text = "\n".join(json.dumps(a, ensure_ascii=False) for a in alerts)
     if _gh_token():
         try:
             return gh_put_file(text + ("\n" if text else ""), commit_message)
         except Exception as e:
             st.error(f"Écriture GitHub échouée: {e}")
-            # on ne tombe pas en local en prod, on signale l’erreur
             return None
     # Fallback local
+    os.makedirs(os.path.dirname(ALERTS_PATH) or ".", exist_ok=True)
     tmp = ALERTS_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(text + ("\n" if text else ""))
     os.replace(tmp, ALERTS_PATH)
+    return True
+
+def save_alert_append(alert: dict, commit_message: str):
+    """Append une seule alerte (JSONL). Fallback local en append pur."""
+    line_text = json.dumps(alert, ensure_ascii=False)
+    if _gh_token():
+        try:
+            return gh_append_line(line_text, commit_message)
+        except Exception as e:
+            st.error(f"Append GitHub échoué: {e}")
+            return None
+    # local: append
+    os.makedirs(os.path.dirname(ALERTS_PATH) or ".", exist_ok=True)
+    with open(ALERTS_PATH, "a", encoding="utf-8") as f:
+        f.write(line_text + "\n")
     return True
 
 def dedupe_alerts(alerts):
@@ -197,6 +235,8 @@ with st.form("add_alert_form", clear_on_submit=True):
             try:
                 canon = canonicalize_immoweb_url(url_in.strip())
                 new_alert = {"url": canon, "email": email_in.strip(), **({"label": label_in.strip()} if SHOW_LABELS else {})}
+
+                # existe déjà ? -> update (réécriture complète)
                 updated = False
                 for i, a in enumerate(st.session_state.alerts):
                     try:
@@ -209,11 +249,14 @@ with st.form("add_alert_form", clear_on_submit=True):
                             st.session_state.alerts[i] = new_alert
                             updated = True
                             break
-                if not updated:
-                    st.session_state.alerts.append(new_alert)
 
-                st.session_state.alerts = dedupe_alerts(st.session_state.alerts)
-                save_alerts(st.session_state.alerts, "Add/update alert from Streamlit")
+                if updated:
+                    st.session_state.alerts = dedupe_alerts(st.session_state.alerts)
+                    save_alerts(st.session_state.alerts, "Update alert from Streamlit")
+                else:
+                    st.session_state.alerts.append(new_alert)
+                    save_alert_append(new_alert, "Append alert from Streamlit")
+
                 st.success("Alerte enregistrée ✅")
             except ValueError as e:
                 st.error(str(e))
@@ -272,6 +315,6 @@ with st.expander("ℹ️ Aide"):
     st.markdown("""
 - Collez l’URL **Immoweb** avec vos filtres (le tri “plus récent” est forcé).
 - Entrez l’**e-mail** destinataire.
-- Les alertes sont **persistées dans GitHub** (`alerts.jsonl`) si un **GH_TOKEN** est configuré.
-- En développement local (sans GH_TOKEN), le fichier `alerts.jsonl` est écrit **en local**.
+- Les alertes sont **persistées dans GitHub** (`AlertMe/alerts.jsonl`) si un **GH_TOKEN** est configuré (avec Contents: Read & Write).
+- En développement local (sans GH_TOKEN), le fichier `AlertMe/alerts.jsonl` est écrit **en local**.
 """)
