@@ -1,0 +1,17 @@
+{
+  "alerts_path": "./alerts.jsonl",
+  "max_alerts": 200,
+  "dedupe_by_canonical_url": true,
+  "ui": {
+    "title": "AlertMe – Gestion des alertes Immoweb",
+    "subtitle": "Ajoutez une alerte (URL + e-mail). Le moteur tourne en arrière-plan.",
+    "show_labels": true
+  },
+  "scraper_defaults": {
+    "pages": 2,
+    "order_keys": ["newest", "most_recent"],
+    "path_aliases": ["/fr/recherche/", "/fr/recherche-avancee/"],
+    "polite_sleep_seconds": 1.0,
+    "use_selenium_fallback": false
+  }
+}

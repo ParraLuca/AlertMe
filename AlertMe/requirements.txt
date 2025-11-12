@@ -1,0 +1,10 @@
+requests>=2.32.3
+beautifulsoup4>=4.12.3
+urllib3>=2.2.2
+# Fallback anti-blocage (optionnel) :
+cloudscraper>=1.2.71
+# Selenium fallback (optionnel) :
+selenium>=4.24.0
+undetected-chromedriver>=3.5.5
+streamlit>=1.39.0
+
