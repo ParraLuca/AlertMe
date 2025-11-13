@@ -5,16 +5,16 @@ alertme_marjorietome.py
 Scraper/alerteur pour https://immotoma.be (ImmoToma / Marjorie Tomé)
 
 Logique:
-- Pas de tri "newest" côté URL: on s'appuie sur un seed initial (aucune notif au 1er run),
-  puis on détecte les nouveautés par différence d'IDs (URL détail hashée si pas d'ID).
+- Pas de tri "newest" côté URL: seed initial (aucune notif au 1er run), puis détection par nouveaux IDs.
 - Pagination WordPress: paramètre 'paged=1..N'.
-- Canonicalisation: suppression de 'paged', normalisation query.
+- Canonicalisation: suppression de 'paged', normalisation de la query et
+  ***correction des clés mal encodées*** (ex: 'filter_search_%20action[]' -> 'filter_search_action[]').
 """
 
-import argparse, json, logging, os, re, time, hashlib, smtplib, ssl
+import argparse, json, logging, os, re, time, hashlib, smtplib, ssl, json as jsonlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from urllib.parse import urlparse, parse_qs, parse_qsl, urlencode, urlunparse, urljoin
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate
@@ -28,7 +28,7 @@ from bs4 import BeautifulSoup
 
 # ---------- Config ----------
 DATA_DIR = os.path.join(".", "data")
-STATE_PATH = os.path.join(DATA_DIR, "state_marjorietome.json")  # dédié à ce site
+STATE_PATH = os.path.join(DATA_DIR, "state_marjorietome.json")
 DEFAULT_PAGES = 2
 REQUEST_TIMEOUT = 25
 POLITE_SLEEP = 1.0
@@ -84,20 +84,41 @@ def save_state(state: Dict[str, Any]) -> None:
 
 
 # ---------- Canonicalisation & pagination ----------
+def _clean_param_name(name: str) -> str:
+    """
+    Corrige des noms de paramètres mal encodés du type 'advanced_city%20' ou 'filter_search_%20action[]'
+    -> supprime %20 et espaces autour.
+    """
+    n = (name or "")
+    n = n.replace("%20", " ")
+    n = re.sub(r"\s+", " ", n).strip()
+    return n.replace(" ", "")  # sur ce site, les espaces dans *le nom* n'ont pas de sens
+
 def canonicalize_marjorietome_url(user_url: str) -> str:
     """
-    Canonicalise: valide le host 'immotoma.be', retire 'paged', compacte la query.
+    - Valide le host 'immotoma.be'
+    - Retire 'paged'
+    - Corrige les noms de clés pollués par des %20/espaces
+    - Conserve la première valeur de chaque clé
     """
     u = urlparse(user_url)
-    if SITE_HOST not in u.netloc:
+    if SITE_HOST not in (u.netloc or ""):
         raise ValueError("URL non-immotoma.")
-    q = parse_qs(u.query)
-    q.pop("paged", None)
-    new_q = urlencode({k: v[0] for k, v in q.items()})  # first-values
+    # parse_qsl pour récupérer paires brutes et pouvoir corriger les *noms* de clés
+    pairs = parse_qsl(u.query, keep_blank_values=True)
+    fixed: Dict[str, str] = {}
+    for k, v in pairs:
+        ck = _clean_param_name(k)
+        if ck.lower() == "paged":  # supprime la pagination dans l'URL canonique
+            continue
+        if ck not in fixed:  # on garde la 1re valeur
+            fixed[ck] = v
+    new_q = urlencode(fixed)
     return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
 
 def with_paged(url: str, paged: int) -> str:
-    u = urlparse(url); q = parse_qs(u.query)
+    u = urlparse(url)
+    q = parse_qs(u.query)
     q["paged"] = [str(max(1, paged))]
     new_q = urlencode({k: v[0] for k, v in q.items()})
     return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
@@ -127,82 +148,126 @@ def fetch_html(session: requests.Session, url: str, referer: Optional[str]=None)
 
 
 # ---------- Parsing ----------
-ID_RE = re.compile(r"(?:/property/|/biens/|/bien/)([^/?#]+)", re.IGNORECASE)
+# élargi: properties, a-vendre, vente, biens, bien
+ID_RE = re.compile(r"(?:/propert(?:y|ies)/|/biens?/|/vente/|/a-vendre/)([^/?#]+)", re.IGNORECASE)
 
 def _stable_id_from_href(href: str) -> str:
-    """
-    Prend l'URL détail et renvoie un ID stable.
-    - Essaye d'extraire un slug après /property/ ou /biens/.
-    - Sinon MD5 de l'URL absolue.
-    """
     if not href:
         return ""
     m = ID_RE.search(href)
     if m:
         return m.group(1).lower()
-    return hashlib.md5(href.encode("utf-8")).hexdigest()  # stable & compact
+    return hashlib.md5(href.encode("utf-8")).hexdigest()
 
 def _int_price(text: str) -> Optional[int]:
     if not text: return None
     s = re.sub(r"[^\d]", "", text)
     return int(s) if s else None
 
+def _abs(url: str) -> str:
+    return url if url.startswith("http") else urljoin(f"https://{SITE_HOST}", url)
+
+def _from_json_ld(soup: BeautifulSoup) -> Dict[str, Dict[str, Any]]:
+    results: Dict[str, Dict[str, Any]] = {}
+    hits = 0
+    for tag in soup.find_all("script", type=lambda t: t and "ld+json" in t):
+        raw = tag.string or tag.get_text()
+        if not (raw and raw.strip()):
+            continue
+        try:
+            data = jsonlib.loads(raw)
+        except Exception:
+            continue
+
+        def walk(x: Any):
+            nonlocal hits
+            if isinstance(x, dict):
+                tp = str(x.get("@type", "")).lower()
+                if any(k in tp for k in ["offer","product","residence","house","apartment","singlefamilyresidence","realestateobject"]):
+                    url = x.get("url") or x.get("mainEntityOfPage")
+                    if isinstance(url, dict): url = url.get("@id") or url.get("url")
+                    if isinstance(url, list) and url: url = url[0]
+                    if isinstance(url, str):
+                        url = _abs(url)
+                        if SITE_HOST in url:
+                            pid = _stable_id_from_href(url)
+                            if pid:
+                                title = x.get("name") or x.get("headline") or ""
+                                price = None
+                                off = x.get("offers")
+                                if isinstance(off, dict):
+                                    price = _int_price(off.get("price") or off.get("priceSpecification", {}).get("price"))
+                                results[pid] = {
+                                    "id": pid, "url": url, "title": title or "",
+                                    "price": price, "location": "", "publication_date": None
+                                }
+                                hits += 1
+                for v in x.values():
+                    walk(v)
+            elif isinstance(x, list):
+                for v in x:
+                    walk(v)
+        walk(data)
+    logging.debug("JSON-LD hits: %d", hits)
+    return results
+
 def extract_items_from_search_html(html: str) -> List[Dict[str, Any]]:
-    """
-    Parse la page de résultats avancés. On récupère:
-    - href de chaque carte → id stable
-    - titre, prix si dispo
-    """
     soup = BeautifulSoup(html, "html.parser")
     found: Dict[str, Dict[str, Any]] = {}
 
-    # Heuristique générique: toutes les <a> vers le domaine immotoma contenant /property/ ou /biens/
+    # (1) JSON-LD d'abord (si dispo)
+    found.update(_from_json_ld(soup))
+
+    # (2) DOM (ancres/cartes)
+    a_hits = 0
     for a in soup.find_all("a", href=True):
         href = a["href"]
-        if SITE_HOST not in href:
+        # accepter relatifs et absolus
+        if not (href.startswith("/") or SITE_HOST in href):
             continue
-        if not ("/property/" in href or "/biens/" in href or "/bien/" in href):
+        if not ("/property/" in href.lower() or "/properties/" in href.lower()
+                or "/biens" in href.lower() or "/vente/" in href.lower()
+                or "/a-vendre/" in href.lower()):
             continue
 
-        url = href if href.startswith("http") else f"https://{SITE_HOST}{href}"
+        url = _abs(href)
         pid = _stable_id_from_href(url)
         if not pid:
             continue
 
-        # Remonte vers la carte pour titre/prix si possible
-        title = (a.get_text(" ", strip=True) or "").strip()
+        # remonte vers la carte
         card = a
-        for _ in range(4):
-            if card and card.parent: card = card.parent
+        for _ in range(6):
+            if card and card.parent:
+                card = card.parent
 
+        # Titre
+        title = (a.get_text(" ", strip=True) or "").strip()
+        if not title and card:
+            # quelques sélecteurs usuels WordPress/WPResidence
+            for sel in ["h2","h3","h4",".property-title",".entry-title",".title",".card-title",".item-title","[class*=title]"]:
+                node = card.select_one(sel) if ("[" in sel or "." in sel) else card.find(sel)
+                if node and (node.get_text(strip=True) or "").strip():
+                    title = node.get_text(" ", strip=True).strip()
+                    break
+
+        # Prix
         price = None
         if card:
-            # champs potentiels de prix
-            price_node = None
-            for t in card.find_all(["span", "div"]):
-                txt = (t.get_text(" ", strip=True) or "").lower()
-                if "€" in txt or " eur" in txt or "euro" in txt:
-                    price_node = t; break
-            if price_node:
-                price = _int_price(price_node.get_text(" ", strip=True))
-
-            if not title:
-                # récupère un autre titre éventuel
-                for sel in ["h2", "h3", "h4", "span", "div"]:
-                    t = card.find(sel)
-                    if t and (t.get_text(strip=True) or "").strip():
-                        title = t.get_text(" ", strip=True).strip()
+            for t in card.find_all(["span","div","p"]):
+                txt = (t.get_text(" ", strip=True) or "")
+                if "€" in txt or "eur" in txt.lower() or "k€" in txt.lower() or "k €" in txt.lower():
+                    price = _int_price(txt)
+                    if price:
                         break
 
         found[pid] = {
-            "id": pid,
-            "url": url,
-            "title": title or "",
-            "price": price,
-            "location": "",           # pas toujours présent: on garde vide si introuvable
-            "publication_date": None  # site ne fournit pas de date fiable côté liste
+            "id": pid, "url": url, "title": title or "",
+            "price": price, "location": "", "publication_date": None
         }
+        a_hits += 1
 
+    logging.debug("Anchor/card hits: %d (total unique items=%d)", a_hits, len(found))
     return list(found.values())
 
 
@@ -414,6 +479,13 @@ def run_once(user_url: str, email: str, pages: int = DEFAULT_PAGES) -> None:
             if p == 1:
                 logging.warning("Page 1: aucune annonce (HTTP). Stop.")
             break
+
+        # dump debug optionnel
+        if os.getenv("MTOMA_DUMP_HTML","0") == "1" and p == 1:
+            os.makedirs("data", exist_ok=True)
+            with open(os.path.join("data","immotoma_page1.html"), "w", encoding="utf-8") as f:
+                f.write(html)
+            logging.debug("Dump HTML → data/immotoma_page1.html")
 
         items = extract_items_from_search_html(html)
         logging.info("Page %d: %d annonce(s) détectée(s).", p, len(items))
