@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-alertme_marjorietome.py
-Scraper/alerteur pour https://immotoma.be (ImmoToma / Marjorie Tomé)
+alertme_marjorietome.py — ImmoToma (Marjorie Tomé)
 
-Logique:
-- Pas de tri "newest" côté URL: seed initial (aucune notif au 1er run), puis détection par nouveaux IDs.
-- Pagination WordPress: paramètre 'paged=1..N'.
-- Canonicalisation: suppression de 'paged', normalisation de la query et
-  ***correction des clés mal encodées*** (ex: 'filter_search_%20action[]' -> 'filter_search_action[]').
+Diff logique vs version précédente:
+- Lecture des filtres attendus depuis l'URL (type/ville)
+- Filtrage strict des cartes DOM selon ces filtres
+- Toujours: correction des clés de query mal encodées, support liens relatifs, fallback JSON-LD, seed/diff
 """
 
 import argparse, json, logging, os, re, time, hashlib, smtplib, ssl, json as jsonlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse, parse_qs, parse_qsl, urlencode, urlunparse, urljoin
+from urllib.parse import urlparse, parse_qs, parse_qsl, urlencode, urlunparse, urljoin, unquote_plus
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate
@@ -24,7 +22,6 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
-
 
 # ---------- Config ----------
 DATA_DIR = os.path.join(".", "data")
@@ -44,7 +41,6 @@ BASE_HEADERS = {
     "Pragma": "no-cache",
 }
 
-
 # ---------- Logging ----------
 def setup_logging():
     lvl = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -53,7 +49,6 @@ def setup_logging():
         format="%(asctime)s | %(levelname)-8s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-
 
 # ---------- State ----------
 def ensure_data_dir():
@@ -82,36 +77,23 @@ def save_state(state: Dict[str, Any]) -> None:
         json.dump(state, f, ensure_ascii=False, indent=2)
     os.replace(tmp, STATE_PATH)
 
-
 # ---------- Canonicalisation & pagination ----------
 def _clean_param_name(name: str) -> str:
-    """
-    Corrige des noms de paramètres mal encodés du type 'advanced_city%20' ou 'filter_search_%20action[]'
-    -> supprime %20 et espaces autour.
-    """
-    n = (name or "")
-    n = n.replace("%20", " ")
+    n = (name or "").replace("%20", " ")
     n = re.sub(r"\s+", " ", n).strip()
-    return n.replace(" ", "")  # sur ce site, les espaces dans *le nom* n'ont pas de sens
+    return n.replace(" ", "")
 
 def canonicalize_marjorietome_url(user_url: str) -> str:
-    """
-    - Valide le host 'immotoma.be'
-    - Retire 'paged'
-    - Corrige les noms de clés pollués par des %20/espaces
-    - Conserve la première valeur de chaque clé
-    """
     u = urlparse(user_url)
     if SITE_HOST not in (u.netloc or ""):
         raise ValueError("URL non-immotoma.")
-    # parse_qsl pour récupérer paires brutes et pouvoir corriger les *noms* de clés
     pairs = parse_qsl(u.query, keep_blank_values=True)
     fixed: Dict[str, str] = {}
     for k, v in pairs:
         ck = _clean_param_name(k)
-        if ck.lower() == "paged":  # supprime la pagination dans l'URL canonique
+        if ck.lower() == "paged":
             continue
-        if ck not in fixed:  # on garde la 1re valeur
+        if ck not in fixed:
             fixed[ck] = v
     new_q = urlencode(fixed)
     return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
@@ -123,6 +105,18 @@ def with_paged(url: str, paged: int) -> str:
     new_q = urlencode({k: v[0] for k, v in q.items()})
     return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
 
+# ---------- Lecture filtres attendus (depuis l'URL) ----------
+def expected_filters_from_url(canon_url: str) -> Dict[str, Optional[str]]:
+    u = urlparse(canon_url)
+    q = parse_qs(u.query)
+    # type (maison/appartement/…)
+    ptype = None
+    for k, vs in q.items():
+        if k.startswith("filter_search_type"):
+            if vs: ptype = unquote_plus(vs[0]).strip().lower()
+    # ville
+    city = (q.get("advanced_city", [""])[0] or "").strip().lower()
+    return {"type": ptype, "city": city}
 
 # ---------- HTTP ----------
 def build_session() -> requests.Session:
@@ -146,9 +140,7 @@ def fetch_html(session: requests.Session, url: str, referer: Optional[str]=None)
     except Exception as e:
         return (None, None, f"requests_exc:{e}")
 
-
 # ---------- Parsing ----------
-# élargi: properties, a-vendre, vente, biens, bien
 ID_RE = re.compile(r"(?:/propert(?:y|ies)/|/biens?/|/vente/|/a-vendre/)([^/?#]+)", re.IGNORECASE)
 
 def _stable_id_from_href(href: str) -> str:
@@ -167,9 +159,9 @@ def _int_price(text: str) -> Optional[int]:
 def _abs(url: str) -> str:
     return url if url.startswith("http") else urljoin(f"https://{SITE_HOST}", url)
 
+# JSON-LD (si dispo)
 def _from_json_ld(soup: BeautifulSoup) -> Dict[str, Dict[str, Any]]:
     results: Dict[str, Dict[str, Any]] = {}
-    hits = 0
     for tag in soup.find_all("script", type=lambda t: t and "ld+json" in t):
         raw = tag.string or tag.get_text()
         if not (raw and raw.strip()):
@@ -178,9 +170,7 @@ def _from_json_ld(soup: BeautifulSoup) -> Dict[str, Dict[str, Any]]:
             data = jsonlib.loads(raw)
         except Exception:
             continue
-
         def walk(x: Any):
-            nonlocal hits
             if isinstance(x, dict):
                 tp = str(x.get("@type", "")).lower()
                 if any(k in tp for k in ["offer","product","residence","house","apartment","singlefamilyresidence","realestateobject"]):
@@ -201,28 +191,48 @@ def _from_json_ld(soup: BeautifulSoup) -> Dict[str, Dict[str, Any]]:
                                     "id": pid, "url": url, "title": title or "",
                                     "price": price, "location": "", "publication_date": None
                                 }
-                                hits += 1
                 for v in x.values():
                     walk(v)
             elif isinstance(x, list):
                 for v in x:
                     walk(v)
         walk(data)
-    logging.debug("JSON-LD hits: %d", hits)
     return results
 
-def extract_items_from_search_html(html: str) -> List[Dict[str, Any]]:
+# Filtre texte de carte selon filtres attendus
+NEG_TYPE_WORDS = ["appartement", "studio", "duplex", "triplex", "flat"]
+def _card_matches_filters(card_text: str, expected: Dict[str, Optional[str]]) -> bool:
+    t = card_text.lower()
+    # type
+    etype = (expected.get("type") or "").lower()
+    if etype:
+        if etype == "maison":
+            if "maison" not in t:
+                return False
+            if any(w in t for w in NEG_TYPE_WORDS):
+                return False
+        else:
+            # pour d'autres types on exige la présence du mot brut
+            if etype not in t:
+                return False
+    # ville
+    city = (expected.get("city") or "").strip().lower()
+    if city:
+        # souvent en capitales dans le badge, on fait un contains simple
+        if city not in t:
+            return False
+    return True
+
+def extract_items_from_search_html(html: str, expected: Dict[str, Optional[str]]) -> List[Dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
     found: Dict[str, Dict[str, Any]] = {}
 
-    # (1) JSON-LD d'abord (si dispo)
+    # (1) JSON-LD
     found.update(_from_json_ld(soup))
 
     # (2) DOM (ancres/cartes)
-    a_hits = 0
     for a in soup.find_all("a", href=True):
         href = a["href"]
-        # accepter relatifs et absolus
         if not (href.startswith("/") or SITE_HOST in href):
             continue
         if not ("/property/" in href.lower() or "/properties/" in href.lower()
@@ -241,10 +251,19 @@ def extract_items_from_search_html(html: str) -> List[Dict[str, Any]]:
             if card and card.parent:
                 card = card.parent
 
+        # texte global de carte (sert au filtrage type/ville)
+        card_text = ""
+        if card:
+            card_text = card.get_text(" ", strip=True) or ""
+        else:
+            card_text = a.get_text(" ", strip=True) or ""
+
+        if not _card_matches_filters(card_text, expected):
+            continue  # << filtrage strict ici
+
         # Titre
         title = (a.get_text(" ", strip=True) or "").strip()
         if not title and card:
-            # quelques sélecteurs usuels WordPress/WPResidence
             for sel in ["h2","h3","h4",".property-title",".entry-title",".title",".card-title",".item-title","[class*=title]"]:
                 node = card.select_one(sel) if ("[" in sel or "." in sel) else card.find(sel)
                 if node and (node.get_text(strip=True) or "").strip():
@@ -258,18 +277,14 @@ def extract_items_from_search_html(html: str) -> List[Dict[str, Any]]:
                 txt = (t.get_text(" ", strip=True) or "")
                 if "€" in txt or "eur" in txt.lower() or "k€" in txt.lower() or "k €" in txt.lower():
                     price = _int_price(txt)
-                    if price:
-                        break
+                    if price: break
 
         found[pid] = {
             "id": pid, "url": url, "title": title or "",
             "price": price, "location": "", "publication_date": None
         }
-        a_hits += 1
 
-    logging.debug("Anchor/card hits: %d (total unique items=%d)", a_hits, len(found))
     return list(found.values())
-
 
 # ---------- Seed & diff ----------
 def seed_if_needed(state: Dict[str, Any], canon_url: str, email: str, items: List[Dict[str, Any]]) -> bool:
@@ -297,12 +312,10 @@ def detect_new_items(state: Dict[str, Any], canon_url: str, items: List[Dict[str
     email = alert.get("email", "")
     seen = set(alert.get("seen_codes", []))
     new_list = [it for it in items if it.get("id") and it["id"] not in seen]
-
     alert["seen_codes"] = sorted(seen.union({it["id"] for it in items if it.get("id")}))
     alert["last_run_utc"] = utc_now_iso()
     save_state(state)
     return new_list, email
-
 
 # ---------- Emails ----------
 def mask(s: Optional[str], keep: int = 2) -> str:
@@ -347,8 +360,7 @@ def build_email(search_url: str, new_items: List[Dict[str, Any]]) -> Tuple[str, 
         price = _fmt_price_eur(it.get("price"))
         title = (it.get("title") or "").strip()
         url = it.get("url") or ""
-        line = f"- [{pid}] {price} · {title}"
-        lines.append(line)
+        lines.append(f"- [{pid}] {price} · {title}")
         lines.append(f"  {url}")
     lines.append("")
     lines.append(f"Voir la recherche : {search_url}")
@@ -425,38 +437,25 @@ def send_email_if_configured(to_email: str, search_url: str, new_items: List[Dic
     if os.getenv("SEND_EMAIL","0") != "1":
         logging.info("SEND_EMAIL != 1 → pas d'envoi.")
         return
-
     host = os.getenv("SMTP_HOST",""); port = int(os.getenv("SMTP_PORT","587") or "587")
     user = os.getenv("SMTP_USER",""); pwd = os.getenv("SMTP_PASS","")
     frm  = os.getenv("FROM_EMAIL", user)
     if not (host and port and user and pwd and to_email):
         logging.warning("Email non configuré (vars manquantes). host=%s port=%s user=%s to=%s", host, port, user, to_email)
         return
-
     subject, text_body, html_body = build_email(search_url, new_items)
-
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = frm
-    msg["To"] = to_email
-    msg["Date"] = formatdate(localtime=True)
+    msg["Subject"] = subject; msg["From"] = frm; msg["To"] = to_email; msg["Date"] = formatdate(localtime=True)
     msg.attach(MIMEText(text_body, "plain", _charset="utf-8"))
     msg.attach(MIMEText(html_body, "html", _charset="utf-8"))
-
-    log_email_config()
     try:
         client = get_smtp_client(host, port)
         if port != 465:
-            client.ehlo()
-            client.starttls(context=ssl.create_default_context())
-            client.ehlo()
-        client.login(user, pwd)
-        client.sendmail(frm, [to_email], msg.as_string())
-        client.quit()
+            client.ehlo(); client.starttls(context=ssl.create_default_context()); client.ehlo()
+        client.login(user, pwd); client.sendmail(frm, [to_email], msg.as_string()); client.quit()
         logging.info("✉️  Email HTML envoyé à %s (%d annonce(s))", to_email, len(new_items))
     except Exception as e:
         logging.error("Échec envoi email: %s", e)
-
 
 # ---------- Runner ----------
 def run_once(user_url: str, email: str, pages: int = DEFAULT_PAGES) -> None:
@@ -465,7 +464,9 @@ def run_once(user_url: str, email: str, pages: int = DEFAULT_PAGES) -> None:
     except ValueError as e:
         logging.error("URL invalide: %s", e); return
 
+    expected = expected_filters_from_url(canon)
     logging.info("Site=ImmoToma | URL canonique: %s", canon)
+    logging.info("Filtres attendus: type=%s | ville=%s", expected.get("type"), expected.get("city"))
     logging.info("Email associé à l'alerte: %s", email)
 
     session = build_session()
@@ -480,18 +481,11 @@ def run_once(user_url: str, email: str, pages: int = DEFAULT_PAGES) -> None:
                 logging.warning("Page 1: aucune annonce (HTTP). Stop.")
             break
 
-        # dump debug optionnel
-        if os.getenv("MTOMA_DUMP_HTML","0") == "1" and p == 1:
-            os.makedirs("data", exist_ok=True)
-            with open(os.path.join("data","immotoma_page1.html"), "w", encoding="utf-8") as f:
-                f.write(html)
-            logging.debug("Dump HTML → data/immotoma_page1.html")
-
-        items = extract_items_from_search_html(html)
-        logging.info("Page %d: %d annonce(s) détectée(s).", p, len(items))
+        items = extract_items_from_search_html(html, expected)
+        logging.info("Page %d: %d annonce(s) détectée(s) après filtrage.", p, len(items))
         if not items:
             if p == 1:
-                logging.warning("Page 1 vide (parsing). Stop.")
+                logging.warning("Page 1 vide (parsing/filtrage). Stop.")
             break
 
         all_items.extend(items)
@@ -512,12 +506,9 @@ def run_once(user_url: str, email: str, pages: int = DEFAULT_PAGES) -> None:
 
     logging.info("✅ %d nouvelle(s) annonce(s) (alerte: %s):", len(new_items), to_email or "—")
     for it in new_items:
-        ptxt = _fmt_price_eur(it.get("price"))
-        logging.info(" • [%s] %s | %s", it["id"], ptxt, it["url"])
-
+        logging.info(" • [%s] %s | %s", it["id"], _fmt_price_eur(it.get("price")), it["url"])
     if to_email:
         send_email_if_configured(to_email, canon, new_items)
-
 
 def main():
     setup_logging()
@@ -526,16 +517,12 @@ def main():
     ap.add_argument("--email", help="Adresse email à associer à cette alerte")
     ap.add_argument("--pages", type=int, default=DEFAULT_PAGES, help="Pages 'paged' à scanner (défaut=2)")
     args = ap.parse_args()
-
     if not (args.url and args.email):
-        logging.error("Il faut --url et --email.")
-        return
-
+        logging.error("Il faut --url et --email."); return
     try:
         run_once(args.url, args.email, args.pages)
     except Exception as e:
         logging.exception("Erreur fatale: %s", e)
-
 
 if __name__ == "__main__":
     main()

@@ -11,7 +11,19 @@
         "735691",
         "79d189085394f09b0b9e04e3a90c035d"
       ],
-      "last_run_utc": "2025-11-13T08:58:48.187877+00:00",
+      "last_run_utc": "2025-11-13T09:17:31.385682+00:00",
+      "email": "luca.parrra@gmail.com"
+    },
+    "https://immotoma.be/advanced-search/?filter_search_action%5B%5D=a-vendre&adv6_search_tab=a-vendre&term_id=119&term_counter=1&filter_search_type%5B%5D=maison&advanced_city=aiseau&price_low_119=0&price_max_119=1500000&submit=Search+Properties": {
+      "created_at_utc": "2025-11-13T09:09:23.185078+00:00",
+      "seen_codes": [
+        "673006",
+        "735305",
+        "735575",
+        "735691",
+        "79d189085394f09b0b9e04e3a90c035d"
+      ],
+      "last_run_utc": "2025-11-13T09:17:38.158471+00:00",
       "email": "luca.parrra@gmail.com"
     }
   }
