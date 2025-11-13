@@ -18,8 +18,7 @@ DEFAULT_CONFIG = {
     # Liste des sites disponibles (clé = identifiant; host sert à valider rapidement l'URL)
     "sites": [
         {"id": "immoweb", "label": "Immoweb", "host_contains": "immoweb.be"},
-        {"id": "seloger",  "label": "SeLoger", "host_contains": "seloger.com"},
-        # Ajoutez d'autres sites ici...
+        { "id": "marjorietome", "label": "ImmoToma (Marjorie Toma)", "host_contains": "immotoma.be" }
     ],
     "scraper_defaults": {
         "pages": 2,
@@ -29,6 +28,26 @@ DEFAULT_CONFIG = {
         "use_selenium_fallback": False
     }
 }
+
+# in streamlit_app.py
+
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
+def canonicalize_by_site(site_id: str, user_url: str) -> str:
+    site_id = (site_id or "").strip().lower()
+    if site_id == "immoweb":
+        return canonicalize_immoweb_url(user_url)
+
+    if site_id == "marjorietome":
+        # canonicalize immotoma.be: drop 'paged', keep first values
+        u = urlparse(user_url)
+        q = parse_qs(u.query)
+        q.pop("paged", None)
+        new_q = urlencode({k: v[0] for k, v in q.items()})
+        return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
+
+    # default fallback
+    return canonicalize_generic_url(user_url)
 
 def load_config():
     if not os.path.isfile(CONFIG_PATH):
