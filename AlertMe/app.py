@@ -11,10 +11,16 @@ DEFAULT_CONFIG = {
     "max_alerts": 200,
     "dedupe_by_canonical_url": True,
     "ui": {
-        "title": "AlertMe – Gestion des alertes Immoweb",
-        "subtitle": "Ajoutez une alerte (URL + e-mail). Les données sont stockées dans GitHub (fallback local en dev).",
+        "title": "AlertMe – Gestion des alertes multi-sites",
+        "subtitle": "Ajoutez une alerte (Site + URL + e-mail). Les données sont stockées dans GitHub (fallback local en dev).",
         "show_labels": True
     },
+    # Liste des sites disponibles (clé = identifiant; host sert à valider rapidement l'URL)
+    "sites": [
+        {"id": "immoweb", "label": "Immoweb", "host_contains": "immoweb.be"},
+        {"id": "seloger",  "label": "SeLoger", "host_contains": "seloger.com"},
+        # Ajoutez d'autres sites ici...
+    ],
     "scraper_defaults": {
         "pages": 2,
         "order_keys": ["newest", "most_recent"],
@@ -46,6 +52,7 @@ ALERTS_PATH = CFG["alerts_path"]
 MAX_ALERTS = CFG["max_alerts"]
 DEDUPE_CANON = bool(CFG.get("dedupe_by_canonical_url", True))
 SHOW_LABELS = bool(CFG.get("ui", {}).get("show_labels", True))
+SITES = CFG.get("sites", [])
 
 # ---------- Utilitaires ----------
 IMMOWEB_HOST = "www.immoweb.be"
@@ -60,6 +67,35 @@ def canonicalize_immoweb_url(user_url: str) -> str:
     q.pop("page", None)  # URL canonique sans pagination
     new_q = urlencode({k: v[0] for k, v in q.items()})
     return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
+
+def canonicalize_generic_url(user_url: str) -> str:
+    """Fallback canonique simple: retire 'page' et normalise query en first-values."""
+    u = urlparse(user_url)
+    q = parse_qs(u.query)
+    q.pop("page", None)
+    new_q = urlencode({k: v[0] for k, v in q.items()})
+    return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
+
+def canonicalize_by_site(site_id: str, user_url: str) -> str:
+    site_id = (site_id or "").strip().lower()
+    if site_id == "immoweb":
+        return canonicalize_immoweb_url(user_url)
+    # Ajoutez ici des branches spécifiques à d’autres sites si besoin
+    return canonicalize_generic_url(user_url)
+
+def host_ok_for_site(site_id: str, user_url: str) -> bool:
+    """Validation souple : l'hôte doit contenir la chaîne configurée pour le site si disponible."""
+    try:
+        u = urlparse(user_url)
+        host = u.netloc.lower()
+    except Exception:
+        return False
+    for s in SITES:
+        if s.get("id") == site_id:
+            needle = (s.get("host_contains") or "").lower().strip()
+            return (needle in host) if needle else True
+    # site inconnu -> on accepte pour ne pas bloquer
+    return True
 
 def is_valid_email(s: str) -> bool:
     return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", s.strip()))
@@ -100,7 +136,6 @@ def gh_get_file():
     return content, sha
 
 def gh_put_file(text: str, message: str):
-    """Réécrit complètement le fichier sur GitHub (non utilisée en mode journal, mais utile pour maintenance)."""
     repo, path, branch = _gh_repo_cfg()
     _, sha = gh_get_file()  # peut être None si première écriture
     url = f"https://api.github.com/repos/{repo}/contents/{path}"
@@ -116,9 +151,8 @@ def gh_put_file(text: str, message: str):
     return r.json()
 
 def gh_append_line(line_text: str, message: str):
-    """Append 1 ligne à alerts.jsonl sur GitHub, en préservant le contenu existant."""
     current, sha = gh_get_file()
-    if current is None:  # fichier n'existe pas encore
+    if current is None:
         new_text = line_text + "\n"
         return gh_put_file(new_text, message)
     if not current.endswith("\n"):
@@ -139,16 +173,14 @@ def gh_append_line(line_text: str, message: str):
 # ---------- Journal d'événements (append-only) ----------
 def make_event(action: str, alert: dict) -> dict:
     assert action in {"add", "update", "delete"}
-    # On stocke toujours url/email/label si présents
     ev = {"ts": utc_iso(), "action": action, "alert": {}}
-    if "url" in alert:   ev["alert"]["url"] = str(alert["url"]).strip()
-    if "email" in alert: ev["alert"]["email"] = str(alert["email"]).strip()
-    if SHOW_LABELS and "label" in alert:
-        ev["alert"]["label"] = str(alert["label"]).strip()
+    # champs toujours permis
+    for key in ("site", "url", "email", "label", "pages"):
+        if key in alert and alert[key] not in (None, ""):
+            ev["alert"][key] = alert[key]
     return ev
 
 def append_event(action: str, alert: dict, commit_message: str):
-    """Append un évènement dans alerts.jsonl (GitHub si token, sinon local)."""
     ev = make_event(action, alert)
     line_text = json.dumps(ev, ensure_ascii=False)
     if _gh_token():
@@ -157,97 +189,100 @@ def append_event(action: str, alert: dict, commit_message: str):
         except Exception as e:
             st.error(f"Append GitHub échoué: {e}")
             return None
-    # local
     os.makedirs(os.path.dirname(ALERTS_PATH) or ".", exist_ok=True)
     with open(ALERTS_PATH, "a", encoding="utf-8") as f:
         f.write(line_text + "\n")
     return True
 
 def _reduce_events_to_state(lines: list[dict]) -> list[dict]:
-    """Rejoue le journal -> état courant dédupliqué par URL canonique.
-       Compatibilité: si une ligne ne possède pas 'action', on la traite comme un add ancien format.
+    """Rejoue le journal -> état courant dédupliqué par (site, URL canonique).
+       Compat : anciennes lignes (sans 'action' ni 'site') => site='immoweb' + add.
     """
     state: dict[str, dict] = {}
+
     for row in lines:
-        # Ancien format (ligne = alerte brute)
         if not isinstance(row, dict):
             continue
+
+        # Ancien format (ligne = alerte brute)
         if "action" not in row or "alert" not in row:
             a = row
-            url_in = (a.get("url","") or "").strip()
+            site = (a.get("site") or "immoweb").strip().lower()
+            url_in = (a.get("url", "") or "").strip()
             if not url_in:
                 continue
             try:
-                key = canonicalize_immoweb_url(url_in)
+                canon = canonicalize_by_site(site, url_in)
             except Exception:
-                key = url_in
-            if not key:
-                continue
+                canon = url_in
+            key = f"{site}|{canon}"
             state[key] = {
-                "url": key,
-                "email": (a.get("email","") or "").strip(),
-                **({"label": (a.get("label","") or "").strip()} if SHOW_LABELS else {})
+                "site": site,
+                "url": canon,
+                "email": (a.get("email", "") or "").strip(),
+                **({"label": (a.get("label", "") or "").strip()} if SHOW_LABELS else {})
             }
             continue
 
-        # Nouveau format (événements)
-        action = row.get("action")
-        a = row.get("alert", {})
-        url_in = (a.get("url","") or "").strip()
-        if not url_in and action != "delete":
-            # add/update sans url -> ignore
-            continue
-        try:
-            key = canonicalize_immoweb_url(url_in) if url_in else ""
-        except Exception:
-            key = url_in
+        # Nouveau format
+        action = (row.get("action") or "").strip().lower()
+        a = row.get("alert", {}) or {}
+        site = (a.get("site") or "immoweb").strip().lower()
+        url_in = (a.get("url", "") or "").strip()
 
-        if action in {"add","update"} and key:
+        if action in {"add", "update"}:
+            if not url_in:
+                continue
+            try:
+                canon = canonicalize_by_site(site, url_in)
+            except Exception:
+                canon = url_in
+            key = f"{site}|{canon}"
             state[key] = {
-                "url": key,
-                "email": (a.get("email","") or "").strip(),
-                **({"label": (a.get("label","") or "").strip()} if SHOW_LABELS else {})
+                "site": site,
+                "url": canon,
+                "email": (a.get("email", "") or "").strip(),
+                **({"label": (a.get("label", "") or "").strip()} if SHOW_LABELS else {})
             }
         elif action == "delete":
-            # delete accepte un event avec seulement {url: ...}
-            # si pas d'url, on ignore
-            if key:
-                state.pop(key, None)
+            if not url_in:
+                continue
+            try:
+                canon = canonicalize_by_site(site, url_in)
+            except Exception:
+                canon = url_in
+            key = f"{site}|{canon}"
+            state.pop(key, None)
 
     return list(state.values())
 
 def load_alerts():
-    """Lit alerts.jsonl (GitHub ou local) et reconstruit l’état en rejouant les événements."""
     raw_lines = []
-    # GitHub
     if _gh_token():
         try:
             content, _ = gh_get_file()
             if content:
                 for l in content.splitlines():
                     l = l.strip()
-                    if not l:
-                        continue
-                    try:
-                        raw_lines.append(json.loads(l))
-                    except json.JSONDecodeError:
-                        pass
+                    if l:
+                        try:
+                            raw_lines.append(json.loads(l))
+                        except json.JSONDecodeError:
+                            pass
             return _reduce_events_to_state(raw_lines)
         except Exception as e:
             st.error(f"Lecture GitHub échouée: {e}")
             return []
-    # Local
     if not os.path.isfile(ALERTS_PATH):
         return []
     with open(ALERTS_PATH, "r", encoding="utf-8") as f:
         for l in f:
             l = l.strip()
-            if not l:
-                continue
-            try:
-                raw_lines.append(json.loads(l))
-            except json.JSONDecodeError:
-                pass
+            if l:
+                try:
+                    raw_lines.append(json.loads(l))
+                except json.JSONDecodeError:
+                    pass
     return _reduce_events_to_state(raw_lines)
 
 # ---------- UI ----------
@@ -260,7 +295,13 @@ if "alerts" not in st.session_state:
 
 with st.form("add_alert_form", clear_on_submit=True):
     st.subheader("Ajouter une alerte")
-    url_in = st.text_input("URL Immoweb (avec filtres)", placeholder="Collez l’URL depuis Immoweb…")
+    # Sélecteur de site
+    site_labels = [s["label"] for s in SITES] if SITES else ["Immoweb"]
+    site_ids = [s["id"] for s in SITES] if SITES else ["immoweb"]
+    site_idx = st.selectbox("Site", options=list(range(len(site_labels))), format_func=lambda i: site_labels[i], index=0)
+    chosen_site = site_ids[site_idx]
+
+    url_in = st.text_input("URL du site choisi (avec filtres)", placeholder="Collez l’URL…")
     email_in = st.text_input("Adresse e-mail", placeholder="ex: prenom.nom@gmail.com")
     label_in = st.text_input("Label (facultatif)", placeholder="ex: Brabant Wallon") if SHOW_LABELS else ""
     submitted = st.form_submit_button("Enregistrer")
@@ -268,17 +309,24 @@ with st.form("add_alert_form", clear_on_submit=True):
     if submitted:
         if not url_in.strip():
             st.error("Merci de fournir une URL.")
+        elif not host_ok_for_site(chosen_site, url_in.strip()):
+            st.error("L’URL ne correspond pas au site sélectionné.")
         elif not email_in.strip() or not is_valid_email(email_in):
             st.error("Adresse e-mail invalide.")
         else:
             try:
-                canon = canonicalize_immoweb_url(url_in.strip())
-                new_alert = {"url": canon, "email": email_in.strip(), **({"label": label_in.strip()} if SHOW_LABELS else {})}
+                canon = canonicalize_by_site(chosen_site, url_in.strip())
+                new_alert = {
+                    "site": chosen_site,
+                    "url": canon,
+                    "email": email_in.strip(),
+                    **({"label": label_in.strip()} if SHOW_LABELS else {})
+                }
 
-                # Existe déjà ? -> upsert (etat mémoire) + append événement
-                exists_idx = next((i for i, a in enumerate(st.session_state.alerts) if a.get("url") == canon), None)
+                # Existe déjà ? clé = (site, canon)
+                key = f"{chosen_site}|{canon}"
+                exists_idx = next((i for i, a in enumerate(st.session_state.alerts) if f"{a.get('site','immoweb')}|{a.get('url','')}" == key), None)
 
-                # Limite d'alertes uniquement si on ajoute vraiment une nouvelle
                 if exists_idx is None and len(st.session_state.alerts) >= MAX_ALERTS:
                     st.error(f"Nombre maximum d’alertes atteint ({MAX_ALERTS}).")
                 else:
@@ -301,10 +349,12 @@ if not st.session_state.alerts:
     st.info("Aucune alerte pour l’instant.")
 else:
     for idx, a in enumerate(st.session_state.alerts):
-        url = a.get("url","")
-        email = a.get("email","")
-        label = a.get("label","") if SHOW_LABELS else ""
+        site = a.get("site", "immoweb")
+        url = a.get("url", "")
+        email = a.get("email", "")
+        label = a.get("label", "") if SHOW_LABELS else ""
         with st.container(border=True):
+            st.markdown(f"**Site :** `{site}`")
             if SHOW_LABELS and label:
                 st.markdown(f"**Label :** {label}")
             st.markdown(f"**URL :** {url}")
@@ -315,24 +365,27 @@ else:
                     st.session_state[f"edit_mode_{idx}"] = True
             with cols[1]:
                 if st.button("🗑️ Supprimer", key=f"del_{idx}"):
-                    # Append event delete (url suffit)
-                    append_event("delete", {"url": url}, "Delete alert from Streamlit")
+                    append_event("delete", {"site": site, "url": url}, "Delete alert from Streamlit")
                     st.session_state.alerts = [x for j, x in enumerate(st.session_state.alerts) if j != idx]
                     st.rerun()
 
             if st.session_state.get(f"edit_mode_{idx}", False):
                 with st.form(f"edit_form_{idx}"):
+                    # site non modifiable ici pour éviter des collisions; créer une nouvelle alerte sinon.
+                    st.markdown(f"_Le site n’est pas modifiable. Supprimez puis recréez pour changer de site._")
                     new_email = st.text_input("Email", value=email)
                     new_label = st.text_input("Label", value=label) if SHOW_LABELS else ""
-                    new_url = st.text_input("URL Immoweb", value=url)
+                    new_url = st.text_input("URL", value=url)
                     ok = st.form_submit_button("Sauvegarder")
                     if ok:
                         try:
                             if not is_valid_email(new_email):
                                 st.warning("Email invalide.")
+                            elif not host_ok_for_site(site, new_url.strip()):
+                                st.warning("URL incohérente avec le site.")
                             else:
-                                canon2 = canonicalize_immoweb_url(new_url.strip())
-                                edited = {"url": canon2, "email": new_email.strip(), **({"label": new_label.strip()} if SHOW_LABELS else {})}
+                                canon2 = canonicalize_by_site(site, new_url.strip())
+                                edited = {"site": site, "url": canon2, "email": new_email.strip(), **({"label": new_label.strip()} if SHOW_LABELS else {})}
                                 st.session_state.alerts[idx] = edited
                                 append_event("update", edited, "Inline edit alert from Streamlit")
                                 st.session_state[f"edit_mode_{idx}"] = False
@@ -344,9 +397,9 @@ else:
 st.divider()
 with st.expander("ℹ️ Aide"):
     st.markdown("""
-- Collez l’URL **Immoweb** avec vos filtres (le tri “plus récent” est forcé).
+- Sélectionnez le **site**, puis collez l’**URL** avec vos filtres (le tri “plus récent” est forcé quand applicable).
 - Entrez l’**e-mail** destinataire.
 - Les alertes sont **persistées dans GitHub** (`AlertMe/alerts.jsonl`) si un **GH_TOKEN** est configuré (Contents: Read & Write).
 - Sans GH_TOKEN, le fichier `AlertMe/alerts.jsonl` est maintenu **en local**.
-- Le fichier est un **journal d’événements** (append-only) : chaque ajout, modification ou suppression écrit **une ligne JSON**.
+- Le fichier est un **journal d’événements** (append-only) : chaque ajout, modification ou suppression écrit **une ligne JSON** avec le **site**.
 """)
