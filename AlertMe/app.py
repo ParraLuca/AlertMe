@@ -5,6 +5,8 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import streamlit as st
 
 # ========== Config ==========
+st.set_page_config(page_title="AlertMe – Gestion des alertes", page_icon="🔔", layout="centered")
+
 CONFIG_PATH = os.path.join(".", "config.json")
 DEFAULT_CONFIG = {
     "alerts_path": "./AlertMe/alerts.jsonl",
@@ -12,7 +14,7 @@ DEFAULT_CONFIG = {
     "dedupe_by_canonical_url": True,
     "ui": {
         "title": "AlertMe – Gestion des alertes multi-sites",
-        "subtitle": "Créez des alertes par site. Pour Immo-KH, définissez vos filtres ici (le lien ne les porte pas).",
+        "subtitle": "Immoweb/ImmoToma via URL filtrée, Immo-KH via filtres intégrés (URL optionnelle).",
         "show_labels": True
     },
     "sites": [
@@ -21,7 +23,7 @@ DEFAULT_CONFIG = {
         {"id": "immokh",       "label": "Immo-KH",                  "host_contains": "immo-kh.be"}
     ],
     "scraper_defaults": {
-        "pages": 20,                      # valeur par défaut proposée dans l'UI
+        "pages": 20,
         "order_keys": ["newest","most_recent"],
         "path_aliases": ["/fr/recherche/","/fr/recherche-avancee/"],
         "polite_sleep_seconds": 1.0
@@ -50,11 +52,11 @@ ALERTS_PATH = CFG["alerts_path"]
 MAX_ALERTS = CFG["max_alerts"]
 SHOW_LABELS = bool(CFG.get("ui", {}).get("show_labels", True))
 SITES = CFG.get("sites", [])
-IMMOWEB_HOST = "www.immoweb.be"
 ORDER_KEYS = CFG.get("scraper_defaults", {}).get("order_keys", ["newest","most_recent"])
 DEFAULT_PAGES = int(CFG.get("scraper_defaults", {}).get("pages", 20))
+IMMOWEB_HOST = "www.immoweb.be"
 
-# ========== Utils ==========
+# ========== Secrets GitHub ==========
 def _safe_secret(key: str) -> str | None:
     try:
         return st.secrets.get(key)  # type: ignore[attr-defined]
@@ -127,6 +129,7 @@ def gh_append_line(line_text: str, message: str):
     r.raise_for_status()
     return r.json()
 
+# ========== Utils ==========
 def is_valid_email(s: str) -> bool:
     return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", s.strip()))
 
@@ -183,7 +186,7 @@ def host_ok_for_site(site_id: str, user_url: str) -> bool:
 
 # ---------- Journal d’événements ----------
 def make_event(action: str, alert: dict) -> dict:
-    assert action in {"add", "update", "delete"}
+    assert action in {"add","update","delete"}
     ev = {"ts": utc_iso(), "action": action, "alert": {}}
     for key in ("site","url","email","label","pages","filters","use_browser"):
         if key in alert and alert[key] not in (None, ""):
@@ -211,6 +214,7 @@ def _reduce_events_to_state(lines: list[dict]) -> list[dict]:
         if not isinstance(row, dict):
             continue
 
+        # Ancien format supporté
         if "action" not in row or "alert" not in row:
             a = row
             site = (a.get("site") or "immoweb").strip().lower()
@@ -232,6 +236,7 @@ def _reduce_events_to_state(lines: list[dict]) -> list[dict]:
             state[key] = rec
             continue
 
+        # Nouveau format
         action = (row.get("action") or "").strip().lower()
         a = row.get("alert", {}) or {}
         site = (a.get("site") or "immoweb").strip().lower()
@@ -298,42 +303,37 @@ def load_alerts():
                     pass
     return _reduce_events_to_state(raw_lines)
 
-# ---------- UI helpers ----------
+# ========== UI helpers ==========
 def filters_summary_str(filters: dict | None) -> str:
     if not filters: return "—"
     parts = []
-    if filters.get("property_types"):
-        parts.append("Types: " + ", ".join(filters["property_types"]))
-    if filters.get("cities"):
-        parts.append("Villes: " + ", ".join(filters["cities"]))
+    if filters.get("property_types"): parts.append("Types: " + ", ".join(filters["property_types"]))
+    if filters.get("cities"): parts.append("Villes: " + ", ".join(filters["cities"]))
     if (filters.get("price_min") is not None) or (filters.get("price_max") is not None):
         parts.append(f"Prix: {filters.get('price_min','—')}→{filters.get('price_max','—')}")
-    if filters.get("bedrooms_min") is not None:
-        parts.append(f"≥{filters['bedrooms_min']} ch.")
-    if filters.get("bathrooms_min") is not None:
-        parts.append(f"≥{filters['bathrooms_min']} sdb")
-    if filters.get("area_min") is not None:
-        parts.append(f"≥{filters['area_min']} m²")
-    if filters.get("include_sold"):
-        parts.append("incl. vendus")
+    if filters.get("bedrooms_min") is not None: parts.append(f"≥{filters['bedrooms_min']} ch.")
+    if filters.get("bathrooms_min") is not None: parts.append(f"≥{filters['bathrooms_min']} sdb")
+    if filters.get("area_min") is not None: parts.append(f"≥{filters['area_min']} m²")
+    if filters.get("include_sold"): parts.append("incl. vendus")
     return " · ".join(parts) if parts else "—"
 
-def immokh_filters_ui():
+def immokh_filters_ui(default=None):
+    d = default or {}
     st.markdown("**Filtres (Immo-KH)**")
+    st.caption("Immo-KH n’encode pas les filtres dans l’URL. Ils sont stockés ici et appliqués par le scraper.")
     col1, col2 = st.columns(2)
     with col1:
-        cities_txt   = st.text_input("Villes (séparées par des virgules)", placeholder="ex: Fosses-la-Ville, Jemeppe-sur-Sambre")
-        price_min    = st.number_input("Prix min (€)", min_value=0, step=1000, value=0)
-        bedrooms_min = st.number_input("Chambres min", min_value=0, step=1, value=0)
-        area_min     = st.number_input("Surface min (m²)", min_value=0, step=5, value=0)
+        cities_txt   = st.text_input("Villes (séparées par des virgules)", value=",".join(d.get("cities", [])), placeholder="ex: Tamines, Aiseau-Presles, Fosses-la-Ville")
+        price_min    = st.number_input("Prix min (€)", min_value=0, step=1000, value=int(d.get("price_min") or 0))
+        bedrooms_min = st.number_input("Chambres min", min_value=0, step=1, value=int(d.get("bedrooms_min") or 0))
+        area_min     = st.number_input("Surface min (m²)", min_value=0, step=5, value=int(d.get("area_min") or 0))
     with col2:
-        price_max     = st.number_input("Prix max (€)", min_value=0, step=1000, value=0)
-        bathrooms_min = st.number_input("Salles de bains min", min_value=0, step=1, value=0)
-        include_sold  = st.checkbox("Inclure les biens vendus ?", value=False)
-
+        price_max      = st.number_input("Prix max (€)", min_value=0, step=1000, value=int(d.get("price_max") or 0))
+        bathrooms_min  = st.number_input("Salles de bains min", min_value=0, step=1, value=int(d.get("bathrooms_min") or 0))
+        include_sold   = st.checkbox("Inclure les biens vendus ?", value=bool(d.get("include_sold") or False))
     TYPES = ["maison","appartement","duplex","penthouse","terrain","villa","studio","immeuble","commerce"]
-    property_types = st.multiselect("Types de biens", options=TYPES, default=["maison"])
-
+    default_types = d.get("property_types") or ["maison","appartement","penthouse","terrain"]
+    property_types = st.multiselect("Types de biens", options=TYPES, default=default_types)
     return {
         "cities": [c.strip() for c in (cities_txt or "").split(",") if c.strip()],
         "price_min": int(price_min) if price_min else None,
@@ -346,7 +346,6 @@ def immokh_filters_ui():
     }
 
 # ========== UI ==========
-st.set_page_config(page_title=CFG["ui"]["title"], page_icon="🔔", layout="centered")
 st.title("🔔 " + CFG["ui"]["title"])
 st.caption(CFG["ui"]["subtitle"])
 
@@ -361,28 +360,26 @@ with st.form("add_alert_form", clear_on_submit=True):
     site_idx    = st.selectbox("Site", options=list(range(len(site_labels))), format_func=lambda i: site_labels[i], index=0)
     chosen_site = site_ids[site_idx]
 
-    # UI spécifique par site
+    # Section URL selon site
     url_placeholder = {
         "immoweb":      "Collez l’URL Immoweb (avec vos filtres)…",
         "marjorietome": "Collez l’URL ImmoToma (avec vos filtres)…",
         "immokh":       "(optionnel) Laisser vide pour la liste par défaut Immo-KH"
     }[chosen_site]
-
     url_in   = st.text_input("URL du site choisi", placeholder=url_placeholder)
     email_in = st.text_input("Adresse e-mail", placeholder="ex: prenom.nom@gmail.com")
 
     with st.expander("Options avancées", expanded=False):
         pages_in = st.number_input("Nombre max de pages/clics à collecter", min_value=1, max_value=200, value=DEFAULT_PAGES, step=1)
-        prefer_browser = st.checkbox("Préférer le navigateur (Playwright) pour Immo-KH", value=True if chosen_site=="immokh" else False, help="Sauvé dans alerts.jsonl (utile pour un batch/infra ultérieurs).")
-
+        prefer_browser = st.checkbox("Préférer le navigateur (Playwright) pour Immo-KH", value=(chosen_site=="immokh"), help="Sauvé dans alerts.jsonl (utile pour un batch ultérieur).")
     label_in = st.text_input("Label (facultatif)", placeholder="ex: Brabant Wallon") if SHOW_LABELS else ""
 
+    # Filtres Immo-KH (UI dédiée)
     filters_payload = None
     if chosen_site == "immokh":
         filters_payload = immokh_filters_ui()
 
     submitted = st.form_submit_button("Enregistrer")
-
     if submitted:
         if not email_in.strip() or not is_valid_email(email_in):
             st.error("Adresse e-mail invalide.")
@@ -394,7 +391,6 @@ with st.form("add_alert_form", clear_on_submit=True):
                     canon = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
                 else:
                     canon = canonicalize_by_site(chosen_site, url_in.strip() or "")
-
                 new_alert = {
                     "site": chosen_site,
                     "url": canon,
@@ -417,7 +413,7 @@ with st.form("add_alert_form", clear_on_submit=True):
                                           if a.get('site') == 'immokh' else "")
                                       ) == key), None)
 
-                # Nettoie None pour ne pas encombrer le JSONL
+                # Nettoie None
                 if new_alert.get("use_browser") is None:
                     new_alert.pop("use_browser", None)
 
@@ -453,8 +449,7 @@ else:
 
         with st.container(border=True):
             st.markdown(f"**Site :** `{site}`")
-            if SHOW_LABELS and label:
-                st.markdown(f"**Label :** {label}")
+            if SHOW_LABELS and label: st.markdown(f"**Label :** {label}")
             st.markdown(f"**URL :** {url or '—'}")
             st.markdown(f"**Email :** {email}")
             if pages: st.markdown(f"**Pages max :** {pages}")
@@ -487,30 +482,7 @@ else:
 
                     new_filters = filters
                     if site == "immokh":
-                        st.markdown("**Filtres (Immo-KH)**")
-                        col1, col2 = st.columns(2)
-                        cities_txt = ",".join((filters or {}).get("cities", []))
-                        with col1:
-                            ef_cities = st.text_input("Villes (séparées par virgules)", value=cities_txt)
-                            ef_price_min = st.number_input("Prix min (€)", min_value=0, step=1000, value=int((filters or {}).get("price_min") or 0))
-                            ef_bed_min   = st.number_input("Chambres min", min_value=0, step=1, value=int((filters or {}).get("bedrooms_min") or 0))
-                            ef_area_min  = st.number_input("Surface min (m²)", min_value=0, step=5, value=int((filters or {}).get("area_min") or 0))
-                        with col2:
-                            ef_price_max   = st.number_input("Prix max (€)", min_value=0, step=1000, value=int((filters or {}).get("price_max") or 0))
-                            ef_bath_min    = st.number_input("Salles de bains min", min_value=0, step=1, value=int((filters or {}).get("bathrooms_min") or 0))
-                            ef_include_sold= st.checkbox("Inclure les biens vendus ?", value=bool((filters or {}).get("include_sold") or False))
-                        TYPES = ["maison","appartement","duplex","penthouse","terrain","villa","studio","immeuble","commerce"]
-                        ef_types = st.multiselect("Types de biens", options=TYPES, default=(filters or {}).get("property_types") or [])
-                        new_filters = {
-                            "cities": [c.strip() for c in (ef_cities or "").split(",") if c.strip()],
-                            "price_min": int(ef_price_min) if ef_price_min else None,
-                            "price_max": int(ef_price_max) if ef_price_max else None,
-                            "bedrooms_min": int(ef_bed_min) if ef_bed_min else None,
-                            "bathrooms_min": int(ef_bath_min) if ef_bath_min else None,
-                            "area_min": int(ef_area_min) if ef_area_min else None,
-                            "include_sold": bool(ef_include_sold),
-                            "property_types": ef_types or []
-                        }
+                        new_filters = immokh_filters_ui(default=filters)
 
                     ok = st.form_submit_button("Sauvegarder")
                     if ok:
@@ -545,9 +517,14 @@ else:
 st.divider()
 with st.expander("ℹ️ Aide"):
     st.markdown("""
-- **Immoweb / ImmoToma** : collez l’**URL** telle que configurée sur le site (l’URL porte vos filtres).
-- **Immo-KH** : l’**URL est optionnelle** (la page liste par défaut est utilisée) et vous **définissez les filtres ici**.  
-- Chaque alerte peut définir **Pages max**. Pour Immo-KH, vous pouvez cocher **Préférer le navigateur (Playwright)** si le scroll infini pose problème.
-- Les alertes sont stockées dans **GitHub** (si `GH_TOKEN` est fourni) sinon **localement** (`alerts.jsonl`).
-- La déduplication tient compte du **site**, de l’**URL canonique**, et pour **Immo-KH**, des **filtres**.
+- **Immoweb / ImmoToma** : collez l’**URL** (les filtres sont portés par l’URL).
+- **Immo-KH** : l’**URL est optionnelle** et vous définissez ici les **filtres** :
+  - **Types** (maison, appartement, penthouse, terrain, …)
+  - **Villes**
+  - **Prix min/max**
+  - **Chambres min**, **SDB min**, **Surface min**
+  - **Inclure vendus** (désactivé par défaut)
+- Chaque alerte peut définir **Pages max** et, pour Immo-KH, **Préférer le navigateur (Playwright)**.
+- Les alertes sont stockées dans **GitHub** (si `GH_TOKEN`) sinon **localement** (`alerts.jsonl`).
+- Déduplication par **site + URL canonique** + (pour Immo-KH) **filtres**.
 """)
