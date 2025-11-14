@@ -1,10 +1,18 @@
+# Core HTTP + parsing
 requests>=2.32.3
 beautifulsoup4>=4.12.3
+lxml>=5.3.0                 # accélère/parsing plus robuste (recommandé)
 urllib3>=2.2.2
-# Fallback anti-blocage (optionnel) :
+
+# Anti-blocage (optionnel)
 cloudscraper>=1.2.71
-# Selenium fallback (optionnel) :
+
+# Selenium (optionnel, gardé si tu veux le fallback)
 selenium>=4.24.0
 undetected-chromedriver>=3.5.5
-streamlit>=1.39.0
 
+# Playwright (navigateur piloté – utilisé pour Immo-KH)
+playwright>=1.48.0
+
+# App Streamlit
+streamlit>=1.39.0

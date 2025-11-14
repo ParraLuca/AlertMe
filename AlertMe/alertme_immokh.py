@@ -10,11 +10,7 @@ Deux modes de collecte:
    - Dernier sweep de sécurité
 
 API exportée (pour batch_alertme.py):
-  run_once(url: str, email: str, pages: int, filters: dict|None = None, **kwargs)
-
-CLI:
-  python alertme_immokh.py --email ... [--pages N] [--filters-file ...] [--filters ...]
-                           [--debug-save-html] [--debug-dump-items] [--use-browser]
+  run_once(url: str|None, email: str, pages: int, filters: dict|None = None, **kwargs)
 """
 
 import argparse, os, re, json, time, logging, hashlib, smtplib, ssl, html as htmllib
@@ -394,14 +390,6 @@ def _collect_all_pages(session: requests.Session, first_inf_url: str, pages: int
 
 # ---------------- Collecteur Navigateur (Playwright)
 def _collect_with_browser(pages_max: int, debug_save_html: bool=False) -> List[Dict[str, Any]]:
-    """
-    Ouvre Chromium (non-headless) et ne s'arrête que si:
-      - pas de nouvelles cartes pendant N cycles,
-      - plus d'ancre 'load more' visible/cliquable,
-      - scrollHeight stable pendant N cycles.
-    Après chaque clic, attend explicitement la réponse /List/InfiniteScroll
-    et inspecte son HTML pour détecter la fin côté backend.
-    """
     try:
         from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
     except Exception:
@@ -456,7 +444,6 @@ def _collect_with_browser(pages_max: int, debug_save_html: bool=False) -> List[D
         except Exception:
             return True, None
 
-    all_html_snapshots = []
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"])
         ctx = browser.new_context(user_agent=BASE_HEADERS["User-Agent"], viewport={"width":1280,"height":900})
@@ -498,13 +485,6 @@ def _collect_with_browser(pages_max: int, debug_save_html: bool=False) -> List[D
             grew_in_height = now_height > last_height
             has_btn = _has_load_more(page)
 
-            if debug_save_html:
-                ensure_data_dir()
-                snap = page.content()
-                all_html_snapshots.append(snap)
-                with open(os.path.join(DATA_DIR, f"immokh_browser_step_{clicks:02d}.html"), "w", encoding="utf-8") as f:
-                    f.write(snap)
-
             if got_more_cards or grew_in_height:
                 stable_cycles = 0
                 last_cards = now_cards
@@ -522,6 +502,7 @@ def _collect_with_browser(pages_max: int, debug_save_html: bool=False) -> List[D
 
             time.sleep(WAIT_BETWEEN)
 
+        # sweep final
         final_before = _count_cards(page)
         for _ in range(2):
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
@@ -531,17 +512,11 @@ def _collect_with_browser(pages_max: int, debug_save_html: bool=False) -> List[D
                 pass
             time.sleep(0.5)
         final_after = _count_cards(page)
-
         if final_after > final_before:
             logging.info("Dernier sweep a encore trouvé %d cartes (total=%d) — on les garde.",
                          final_after - final_before, final_after)
 
         final_html = page.content()
-        if debug_save_html:
-            ensure_data_dir()
-            with open(os.path.join(DATA_DIR, "immokh_browser_final.html"), "w", encoding="utf-8") as f:
-                f.write(final_html)
-
         items = _parse_cards_from_html(final_html, "Browser DOM final")
         try:
             browser.close()
@@ -582,9 +557,7 @@ def apply_filters(items: List[Dict[str, Any]], filters: Optional[Dict[str, Any]]
         b = it.get("bedrooms")
         if bedrooms_min is not None and ((b or 0) < bedrooms_min): continue
 
-        # Ces champs ne sont pas nativement présents dans les cartes (fallback sur texte si souhaité)
-        # bathrooms / area non déterminés sur la liste → on ne les filtre que si fournis ultérieurement
-        _ = bathrooms_min, area_min  # placeholders si futur enrichissement
+        _ = bathrooms_min, area_min  # placeholders (liste ne contient pas ces infos)
 
         if not include_sold and ("vendu" in txt_all or "option" in txt_all):
             continue
@@ -594,7 +567,7 @@ def apply_filters(items: List[Dict[str, Any]], filters: Optional[Dict[str, Any]]
     logging.info("Filtrage: %d -> %d items", len(items), len(out))
     return out
 
-# ---------------- Seed/diff/email
+# ---------------- Email
 def _fmt_price_eur(v: Optional[int]) -> str:
     return "—" if v is None else f"{v:,}€".replace(",", " ")
 
@@ -690,12 +663,15 @@ def detect_new_items(state: Dict[str, Any], state_key: str, items: List[Dict[str
     return new_list, alert.get("email","")
 
 # ---------------- Canonicalize pour batch
-def canonicalize_list_url(user_url: str) -> str:
+def canonicalize_list_url(user_url: Optional[str]) -> str:
     """
     Canonicalisation souple pour Immo-KH liste "à vendre".
     - Force le chemin liste principal (on ignore la pagination).
     - Conserve le schéma/host si valides sinon base LIST_URL.
+    - Si user_url est vide -> LIST_URL.
     """
+    if not user_url:
+        return LIST_URL
     try:
         parts = urlsplit(user_url or "")
         host = parts.netloc or SITE_HOST
@@ -777,7 +753,7 @@ def _load_filters(filters: Optional[str], filters_file: Optional[str]) -> Option
 def main():
     setup_logging()
     ap = argparse.ArgumentParser(description="AlertMe Immo-KH — Collecte robuste (HTTP ou navigateur)")
-    ap.add_argument("--url", type=str, default=LIST_URL, help="URL de la liste (ignorée pour la canonicalisation Immo-KH)")
+    ap.add_argument("--url", type=str, default=LIST_URL, help="(Ignorée/normalisée) URL de la liste Immo-KH")
     ap.add_argument("--email", required=True, help="Adresse email pour l’alerte")
     ap.add_argument("--pages", type=int, default=DEFAULT_PAGES, help="Nombre max de fenêtres/clics")
     ap.add_argument("--filters", type=str, help="JSON des filtres")

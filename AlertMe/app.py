@@ -62,8 +62,8 @@ def canonicalize_immoweb_url(user_url: str) -> str:
     if IMMOWEB_HOST not in u.netloc:
         raise ValueError("Ce n'est pas une URL Immoweb.")
     q = parse_qs(u.query)
-    q["orderBy"] = [ORDER_KEYS[0] if ORDER_KEYS else "newest"]
-    q.pop("page", None)
+    q["orderBy"] = [ORDER_KEYS[0] if ORDER_KEYS else "newest"]  # force tri récent
+    q.pop("page", None)  # URL canonique sans pagination
     new_q = urlencode({k: v[0] for k, v in q.items()})
     return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
 
@@ -75,12 +75,12 @@ def canonicalize_marjorietome_url(user_url: str) -> str:
     return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
 
 def canonicalize_generic_url(user_url: str) -> str:
-    u = urlparse(user_url)
+    u = urlparse(user_url or "")
     q = parse_qs(u.query)
     for k in ("page", "paged"):
         q.pop(k, None)
     new_q = urlencode({k: (v[0] if isinstance(v, list) and v else v) for k, v in q.items()})
-    return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
+    return urlunparse((u.scheme or "https", u.netloc, u.path, u.params, new_q, u.fragment))
 
 def canonicalize_by_site(site_id: str, user_url: str) -> str:
     site_id = (site_id or "").strip().lower()
@@ -92,6 +92,9 @@ def canonicalize_by_site(site_id: str, user_url: str) -> str:
     return canonicalize_generic_url(user_url)
 
 def host_ok_for_site(site_id: str, user_url: str) -> bool:
+    # Pour Immo-KH on autorise URL vide (elle sera forcée côté batch/immokh)
+    if (site_id or "").lower().strip() == "immokh" and not (user_url or "").strip():
+        return True
     try:
         u = urlparse(user_url)
         host = (u.netloc or "").lower()
@@ -128,14 +131,21 @@ def filters_summary_str(filters: dict | None) -> str:
         parts.append("incl. vendus")
     return " · ".join(parts) if parts else "—"
 
-# ---------- Stockage GitHub ----------
+# ---------- Secrets sûrs (GitHub) ----------
+def _safe_secret(key: str) -> str | None:
+    # Évite l'exception StreamlitSecretNotFoundError si aucun secrets.toml
+    try:
+        return st.secrets.get(key)  # type: ignore[attr-defined]
+    except Exception:
+        return None
+
 def _gh_token():
-    return st.secrets.get("GH_TOKEN") or os.getenv("GH_TOKEN")
+    return _safe_secret("GH_TOKEN") or os.getenv("GH_TOKEN")
 
 def _gh_repo_cfg():
-    repo   = st.secrets.get("GH_REPO", os.getenv("GH_REPO", "ParraLuca/AlertMe"))
-    path   = st.secrets.get("GH_PATH", os.getenv("GH_PATH", "AlertMe/alerts.jsonl"))
-    branch = st.secrets.get("GH_BRANCH", os.getenv("GH_BRANCH", "main"))
+    repo   = _safe_secret("GH_REPO")  or os.getenv("GH_REPO",  "ParraLuca/AlertMe")
+    path   = _safe_secret("GH_PATH")  or os.getenv("GH_PATH",  "AlertMe/alerts.jsonl")
+    branch = _safe_secret("GH_BRANCH") or os.getenv("GH_BRANCH", "main")
     return repo, path, branch
 
 def _gh_headers():
@@ -219,6 +229,11 @@ def append_event(action: str, alert: dict, commit_message: str):
     return True
 
 def _reduce_events_to_state(lines: list[dict]) -> list[dict]:
+    """Rejoue le journal -> état courant dédupliqué.
+       Clé de dédup:
+       - par défaut: (site, URL canonique)
+       - immokh avec 'filters': (site, URL canonique, json.dumps(filters, sort_keys=True))
+    """
     state: dict[str, dict] = {}
 
     for row in lines:
@@ -230,8 +245,9 @@ def _reduce_events_to_state(lines: list[dict]) -> list[dict]:
             a = row
             site = (a.get("site") or "immoweb").strip().lower()
             url_in = (a.get("url","") or "").strip()
-            if not url_in:
-                continue
+            # Immo-KH: URL vide autorisée → forcée à la liste canonique
+            if site == "immokh" and not url_in:
+                url_in = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
             try:
                 canon = canonicalize_by_site(site, url_in)
             except Exception:
@@ -251,12 +267,12 @@ def _reduce_events_to_state(lines: list[dict]) -> list[dict]:
         site = (a.get("site") or "immoweb").strip().lower()
         url_in = (a.get("url","") or "").strip()
         filters = a.get("filters")
+        if site == "immokh" and not url_in:
+            url_in = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
 
         filt_key = json.dumps(filters, sort_keys=True, ensure_ascii=False) if filters else ""
 
         if action in {"add", "update"}:
-            if not url_in:
-                continue
             try:
                 canon = canonicalize_by_site(site, url_in)
             except Exception:
@@ -275,12 +291,12 @@ def _reduce_events_to_state(lines: list[dict]) -> list[dict]:
             state[key] = rec
 
         elif action == "delete":
-            if not url_in:
-                continue
             try:
-                canon = canonicalize_by_site(site, url_in)
+                canon = canonicalize_by_site(site, url_in) if url_in else url_in
             except Exception:
                 canon = url_in
+            if site == "immokh" and not canon:
+                canon = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
             key = f"{site}|{canon}"
             if filt_key:
                 key += f"|{filt_key}"
@@ -332,7 +348,10 @@ with st.form("add_alert_form", clear_on_submit=True):
     site_idx = st.selectbox("Site", options=list(range(len(site_labels))), format_func=lambda i: site_labels[i], index=0)
     chosen_site = site_ids[site_idx]
 
-    url_in = st.text_input("URL du site choisi (avec filtres si disponibles)", placeholder="Collez l’URL…")
+    # Pour Immo-KH, l’URL est optionnelle (toujours la même liste)
+    url_placeholder = ("(optionnel) Laisser vide pour la liste par défaut Immo-KH"
+                       if chosen_site == "immokh" else "Collez l’URL…")
+    url_in = st.text_input("URL du site choisi", placeholder=url_placeholder)
     email_in = st.text_input("Adresse e-mail", placeholder="ex: prenom.nom@gmail.com")
     label_in = st.text_input("Label (facultatif)", placeholder="ex: Brabant Wallon") if SHOW_LABELS else ""
 
@@ -368,15 +387,17 @@ with st.form("add_alert_form", clear_on_submit=True):
     submitted = st.form_submit_button("Enregistrer")
 
     if submitted:
-        if not url_in.strip():
-            st.error("Merci de fournir une URL.")
+        if not email_in.strip() or not is_valid_email(email_in):
+            st.error("Adresse e-mail invalide.")
         elif not host_ok_for_site(chosen_site, url_in.strip()):
             st.error("L’URL ne correspond pas au site sélectionné.")
-        elif not email_in.strip() or not is_valid_email(email_in):
-            st.error("Adresse e-mail invalide.")
         else:
             try:
-                canon = canonicalize_by_site(chosen_site, url_in.strip())
+                # Canonicalisation: pour Immo-KH, si vide -> on met la liste par défaut
+                if chosen_site == "immokh" and not url_in.strip():
+                    canon = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
+                else:
+                    canon = canonicalize_by_site(chosen_site, url_in.strip() or "")
                 new_alert = {
                     "site": chosen_site,
                     "url": canon,
@@ -384,8 +405,9 @@ with st.form("add_alert_form", clear_on_submit=True):
                     **({"label": label_in.strip()} if SHOW_LABELS else {})
                 }
                 if chosen_site == "immokh":
-                    new_alert["filters"] = filters_payload
+                    new_alert["filters"] = filters_payload or {}
 
+                # Clé de dédup
                 key = f"{chosen_site}|{canon}"
                 if chosen_site == "immokh":
                     key += "|" + json.dumps(new_alert.get("filters") or {}, sort_keys=True, ensure_ascii=False)
@@ -428,7 +450,7 @@ else:
             st.markdown(f"**Site :** `{site}`")
             if SHOW_LABELS and label:
                 st.markdown(f"**Label :** {label}")
-            st.markdown(f"**URL :** {url}")
+            st.markdown(f"**URL :** {url or '—'}")
             st.markdown(f"**Email :** {email}")
             if site == "immokh":
                 st.markdown(f"**Filtres :** {filters_summary_str(filters)}")
@@ -439,7 +461,10 @@ else:
                     st.session_state[f"edit_mode_{idx}"] = True
             with cols[1]:
                 if st.button("🗑️ Supprimer", key=f"del_{idx}"):
-                    append_event("delete", {"site": site, "url": url, **({"filters": filters} if site == "immokh" else {})}, "Delete alert from Streamlit")
+                    payload = {"site": site, "url": url}
+                    if site == "immokh":
+                        payload["filters"] = filters
+                    append_event("delete", payload, "Delete alert from Streamlit")
                     st.session_state.alerts = [x for j, x in enumerate(st.session_state.alerts) if j != idx]
                     st.rerun()
 
@@ -485,7 +510,10 @@ else:
                             elif not host_ok_for_site(site, new_url.strip()):
                                 st.warning("URL incohérente avec le site.")
                             else:
-                                canon2 = canonicalize_by_site(site, new_url.strip())
+                                if site == "immokh" and not new_url.strip():
+                                    canon2 = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
+                                else:
+                                    canon2 = canonicalize_by_site(site, new_url.strip() or "")
                                 edited = {
                                     "site": site,
                                     "url": canon2,
@@ -507,7 +535,7 @@ st.divider()
 with st.expander("ℹ️ Aide"):
     st.markdown("""
 - Sélectionnez le **site**, puis collez l’**URL** (avec filtres si le site en propose).
-- Pour **Immo-KH**, vous pouvez définir des filtres ici (types, villes, prix, chambres, etc.). Ils seront appliqués côté scraper.
+- Pour **Immo-KH**, **l’URL est optionnelle** (la liste par défaut est utilisée) et **les filtres ci-dessus** sont enregistrés dans `alerts.jsonl`.
 - Les alertes sont **persistées dans GitHub** (`AlertMe/alerts.jsonl`) si un **GH_TOKEN** est configuré (Contents: Read & Write). Sinon, stockage local.
 - Le fichier est un **journal d’événements** append-only; la déduplication tient compte du **site**, de l’**URL canonique** et, pour **Immo-KH**, des **filtres**.
 """)

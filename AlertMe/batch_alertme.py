@@ -50,9 +50,23 @@ def _fallback_canonicalize(url: str) -> str:
     except Exception:
         return url
 
+def _canon_immokh_if_empty(site: str, url: str) -> str:
+    """Pour Immo-KH, autoriser URL vide → forcer URL liste canonique."""
+    if (site or "").lower().strip() != "immokh":
+        return url
+    try:
+        mod = importlib.import_module("alertme_immokh")
+        return getattr(mod, "canonicalize_list_url")(url or None)
+    except Exception:
+        return "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
+
 def canonicalize(site: str, url: str) -> str:
-    """Essaie d’appeler une fonction de canonicalisation spécifique au module du site, sinon fallback."""
+    """Essaie d’appeler une fonction de canonicalisation spécifique au module du site, sinon fallback.
+       Immo-KH: autorise URL vide → canonicalize_list_url().
+    """
     site = (site or "immoweb").strip().lower()
+    url = _canon_immokh_if_empty(site, url)
+
     try:
         mod = importlib.import_module(f"alertme_{site}")
     except Exception:
@@ -78,13 +92,15 @@ def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]
             logging.warning("Ligne %d: non-objet JSON -> ignorée.", i)
             continue
 
-        # Ancien format
+        # Ancien format (sans filtres)
         if "action" not in row or "alert" not in row:
             site = (row.get("site") or "immoweb").strip().lower()
             url = (row.get("url") or "").strip()
             email = (row.get("email") or "").strip()
-            if not url or not email:
-                logging.warning("Ligne %d: ancien format sans url/email -> ignorée.", i)
+            if site == "immokh" and not url:
+                url = _canon_immokh_if_empty(site, url)
+            if not email:
+                logging.warning("Ligne %d: ancien format sans email -> ignorée.", i)
                 continue
             key_url = canonicalize(site, url)
             pages = int(row.get("pages", default_pages) or default_pages)
@@ -101,7 +117,9 @@ def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]
 
         site = (alert.get("site") or "immoweb").strip().lower()
         url = (alert.get("url") or "").strip()
-        key_url = canonicalize(site, url) if url else ""
+        if site == "immokh" and not url:
+            url = _canon_immokh_if_empty(site, url)
+        key_url = canonicalize(site, url) if (url or site == "immokh") else ""
 
         filters = alert.get("filters") or {}
         filters_json_key = json.dumps(filters, sort_keys=True, ensure_ascii=False) if filters else ""
@@ -166,7 +184,10 @@ def read_jsonl_effective_items(path: str, default_pages: int) -> List[dict]:
         pages = int(it.get("pages", default_pages) or default_pages)
         filters = it.get("filters")
 
-        if site and url and email:
+        if site == "immokh" and not url:
+            url = _canon_immokh_if_empty(site, url)
+
+        if site and (url or site == "immokh") and email:
             rec = {"site": site, "url": url, "email": email, "pages": pages}
             if filters is not None:
                 rec["filters"] = filters
