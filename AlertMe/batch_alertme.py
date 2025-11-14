@@ -3,21 +3,9 @@
 """
 batch_alertme.py
 Exécute en série les alertes (Site ↔ URL ↔ Email) définies dans un JSONL (journal d'événements).
-
-Compat:
-- Ancien format: {"url","email","pages"?} -> site="immoweb" par défaut.
-- Nouveau format: {"ts","action","alert":{"site","url","email","label"?, "pages"?, ...}}
-
-Fonctionnement:
-1) git pull (robuste, gère worktrees) pour être à jour.
-2) lecture JSONL, replay du journal, dédup par (site, url canonique).
-3) dispatch dynamique vers le module Python correspondant:
-   - module = f"alertme_{site}". Exemple: site=immoweb -> alertme_immoweb.py
-   - le module doit exposer: run_once(url:str, email:str, pages:int) et (optionnel) canonicalize_...()
-Log complet du module choisi et des exécutions.
 """
 
-import argparse, json, logging, os, sys, subprocess, importlib
+import argparse, json, logging, os, sys, subprocess, importlib, inspect
 from typing import Dict, List, Tuple, Optional
 
 # ---------- Git sync (robuste) ----------
@@ -70,7 +58,6 @@ def canonicalize(site: str, url: str) -> str:
     except Exception:
         return _fallback_canonicalize(url)
 
-    # cherche une fonction candidate dans le module (nom souple)
     for name in dir(mod):
         if name.startswith("canonicalize") and "url" in name:
             fn = getattr(mod, name)
@@ -83,7 +70,7 @@ def canonicalize(site: str, url: str) -> str:
 
 # ---------- Lecture & réduction JSONL ----------
 def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]:
-    """Rejoue le journal -> état courant. Clé de dédup: (site, canon_url)."""
+    """Rejoue le journal -> état courant. Clé de dédup: (site, canon_url) ou [immokh] (site, canon_url, filters_JSON)."""
     state: Dict[str, dict] = {}
 
     for i, row in enumerate(lines, 1):
@@ -116,6 +103,9 @@ def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]
         url = (alert.get("url") or "").strip()
         key_url = canonicalize(site, url) if url else ""
 
+        filters = alert.get("filters") or {}
+        filters_json_key = json.dumps(filters, sort_keys=True, ensure_ascii=False) if filters else ""
+
         if action in {"add", "update"}:
             if not key_url:
                 logging.warning("Ligne %d: %s sans URL -> ignorée.", i, action)
@@ -125,13 +115,23 @@ def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]
                 logging.warning("Ligne %d: %s sans email -> ignorée.", i, action)
                 continue
             pages = int(alert.get("pages", default_pages) or default_pages)
+
             key = f"{site}|{key_url}"
-            state[key] = {"site": site, "url": key_url, "email": email, "pages": pages}
+            if filters_json_key:
+                key += f"|{filters_json_key}"
+
+            item = {"site": site, "url": key_url, "email": email, "pages": pages}
+            if filters_json_key:
+                item["filters"] = filters
+            state[key] = item
+
         elif action == "delete":
             if not key_url:
                 logging.warning("Ligne %d: delete sans URL -> ignorée.", i)
                 continue
             key = f"{site}|{key_url}"
+            if filters_json_key:
+                key += f"|{filters_json_key}"
             state.pop(key, None)
 
     return list(state.values())
@@ -164,15 +164,19 @@ def read_jsonl_effective_items(path: str, default_pages: int) -> List[dict]:
         url = (it.get("url") or "").strip()
         email = (it.get("email") or "").strip()
         pages = int(it.get("pages", default_pages) or default_pages)
+        filters = it.get("filters")
+
         if site and url and email:
-            out.append({"site": site, "url": url, "email": email, "pages": pages})
+            rec = {"site": site, "url": url, "email": email, "pages": pages}
+            if filters is not None:
+                rec["filters"] = filters
+            out.append(rec)
         else:
             logging.warning("Enregistrement incomplet -> ignoré: %r", it)
     return out
 
-# ---------- Dispatch vers module par site ----------
-def dispatch_run(site: str, url: str, email: str, pages: int):
-    """Importe alertme_{site} et appelle run_once(). Logge le module choisi."""
+# ---------- Dispatch ----------
+def dispatch_run(site: str, url: str, email: str, pages: int, filters: Optional[dict] = None):
     site = (site or "immoweb").strip().lower()
     mod_name = f"alertme_{site}"
     try:
@@ -184,19 +188,24 @@ def dispatch_run(site: str, url: str, email: str, pages: int):
     run_fn = getattr(mod, "run_once", None)
     if not callable(run_fn):
         raise RuntimeError(f"Le module {mod_name} n’expose pas run_once(url,email,pages).")
+
     logging.info("Dispatch: site=%s -> module=%s.run_once", site, mod_name)
-    return run_fn(url, email, pages)
+
+    try:
+        sig = inspect.signature(run_fn)
+        if "filters" in sig.parameters:
+            return run_fn(url, email, pages, filters=filters)
+        else:
+            return run_fn(url, email, pages)
+    except Exception:
+        return run_fn(url, email, pages)
 
 # ---------- Main ----------
 def main():
-    # logging de base
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s")
-
-    # 1) Git pull (robuste)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     git_pull_repo(script_dir)
 
-    # 2) Args
     ap = argparse.ArgumentParser(description="Batch runner multi-sites (URL ↔ email)")
     ap.add_argument("--config", required=True, help="Fichier JSONL (ancien format OU journal d'événements)")
     ap.add_argument("--default-pages", type=int, default=2, help="Nombre de pages par défaut si non spécifié")
@@ -207,7 +216,6 @@ def main():
         logging.error("Fichier de config introuvable: %s", args.config)
         sys.exit(1)
 
-    # 3) Lecture + exécution
     alerts = read_jsonl_effective_items(args.config, args.default_pages)
     if not alerts:
         logging.warning("Aucune alerte exploitable dans %s.", args.config)
@@ -223,9 +231,11 @@ def main():
         url = a["url"]
         email = a["email"]
         pages = int(a.get("pages", args.default_pages))
+        filters = a.get("filters")
+
         logging.info("(%d/%d) site=%s | URL=%s | email=%s | pages=%d", idx, total, site, url, email, pages)
         try:
-            dispatch_run(site, url, email, pages)
+            dispatch_run(site, url, email, pages, filters=filters)
             ok += 1
         except Exception as e:
             logging.exception("Échec sur (site=%s, %s -> %s): %s", site, url, email, e)

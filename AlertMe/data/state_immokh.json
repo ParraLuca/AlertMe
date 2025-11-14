@@ -1,0 +1,40 @@
+{
+  "alerts": {
+    "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre#filters=bf21a9e8fbc5a3846fb05b4fa0859e0917b2202f": {
+      "created_at_utc": "2025-11-13T17:35:18.854733+00:00",
+      "seen_codes": [
+        "b0e0166a7bbb357384fe6b667",
+        "b0e0166a7bbb357384fe6b66dc3ec7b7",
+        "e",
+        "e4b5b5c50e5c6ed4f9b97b6d861"
+      ],
+      "last_run_utc": "2025-11-13T21:46:39.724181+00:00",
+      "email": "luca.parrra@gmail.com"
+    },
+    "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre#filters=91545ba13ead4c92b5f691858d8a438d67a23a34": {
+      "created_at_utc": "2025-11-13T22:08:55.537299+00:00",
+      "seen_codes": [
+        "4794055",
+        "5878147",
+        "6190916",
+        "6297637",
+        "6913454",
+        "6984659",
+        "7050720",
+        "7051061",
+        "7051796",
+        "7119129",
+        "7132205",
+        "7140628",
+        "7180464",
+        "7181099",
+        "7215602",
+        "7232301",
+        "7241480",
+        "7241539"
+      ],
+      "last_run_utc": "2025-11-14T09:06:02.880106+00:00",
+      "email": "luca.parrra@gmail.com"
+    }
+  }
+}
