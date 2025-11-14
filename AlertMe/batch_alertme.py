@@ -122,6 +122,8 @@ def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]
         key_url = canonicalize(site, url) if (url or site == "immokh") else ""
 
         filters = alert.get("filters") or {}
+        use_browser = alert.get("use_browser")
+
         filters_json_key = json.dumps(filters, sort_keys=True, ensure_ascii=False) if filters else ""
 
         if action in {"add", "update"}:
@@ -141,6 +143,8 @@ def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]
             item = {"site": site, "url": key_url, "email": email, "pages": pages}
             if filters_json_key:
                 item["filters"] = filters
+            if use_browser is not None:
+                item["use_browser"] = bool(use_browser)
             state[key] = item
 
         elif action == "delete":
@@ -183,6 +187,7 @@ def read_jsonl_effective_items(path: str, default_pages: int) -> List[dict]:
         email = (it.get("email") or "").strip()
         pages = int(it.get("pages", default_pages) or default_pages)
         filters = it.get("filters")
+        use_browser = it.get("use_browser")
 
         if site == "immokh" and not url:
             url = _canon_immokh_if_empty(site, url)
@@ -191,13 +196,15 @@ def read_jsonl_effective_items(path: str, default_pages: int) -> List[dict]:
             rec = {"site": site, "url": url, "email": email, "pages": pages}
             if filters is not None:
                 rec["filters"] = filters
+            if use_browser is not None:
+                rec["use_browser"] = bool(use_browser)
             out.append(rec)
         else:
             logging.warning("Enregistrement incomplet -> ignoré: %r", it)
     return out
 
 # ---------- Dispatch ----------
-def dispatch_run(site: str, url: str, email: str, pages: int, filters: Optional[dict] = None):
+def dispatch_run(site: str, url: str, email: str, pages: int, **extra):
     site = (site or "immoweb").strip().lower()
     mod_name = f"alertme_{site}"
     try:
@@ -212,14 +219,10 @@ def dispatch_run(site: str, url: str, email: str, pages: int, filters: Optional[
 
     logging.info("Dispatch: site=%s -> module=%s.run_once", site, mod_name)
 
-    try:
-        sig = inspect.signature(run_fn)
-        if "filters" in sig.parameters:
-            return run_fn(url, email, pages, filters=filters)
-        else:
-            return run_fn(url, email, pages)
-    except Exception:
-        return run_fn(url, email, pages)
+    # on ne passe au module que les paramètres qu’il accepte
+    sig = inspect.signature(run_fn)
+    kwargs = {k: v for k, v in extra.items() if k in sig.parameters}
+    return run_fn(url, email, pages, **kwargs)
 
 # ---------- Main ----------
 def main():
@@ -253,10 +256,11 @@ def main():
         email = a["email"]
         pages = int(a.get("pages", args.default_pages))
         filters = a.get("filters")
+        use_browser = a.get("use_browser")
 
         logging.info("(%d/%d) site=%s | URL=%s | email=%s | pages=%d", idx, total, site, url, email, pages)
         try:
-            dispatch_run(site, url, email, pages, filters=filters)
+            dispatch_run(site, url, email, pages, filters=filters, use_browser=use_browser)
             ok += 1
         except Exception as e:
             logging.exception("Échec sur (site=%s, %s -> %s): %s", site, url, email, e)
