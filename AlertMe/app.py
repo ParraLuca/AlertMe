@@ -4,16 +4,52 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import streamlit as st
 
-# ====================== CONFIG GÉNÉRALE ======================
+# ============== THEME / PAGE ==============
 st.set_page_config(page_title="AlertMe – Gestion des alertes", page_icon="🔔", layout="centered")
+st.markdown("""
+<style>
+:root {
+  --pri:#4f46e5;       /* indigo */
+  --pri-2:#eef2ff;     /* indigo-50 */
+  --acc:#10b981;       /* emerald */
+  --txt:#0f172a;       /* slate-900 */
+  --mut:#64748b;       /* slate-500 */
+  --bg:#ffffff;
+  --card:#f8fafc;      /* slate-50 */
+  --border:#e2e8f0;    /* slate-200 */
+}
+html, body, [class^="css"]  { color: var(--txt); }
+h1, h2, h3, .stTabs [data-baseweb="tab"], .stButton>button { font-weight: 600; }
+.stTabs [data-baseweb="tab-list"] { gap: 6px; }
+.stTabs [data-baseweb="tab"] {
+  border-radius: 10px; background: var(--card); border: 1px solid var(--border);
+}
+.stTabs [aria-selected="true"] {
+  background: var(--pri-2) !important; border-color: var(--pri) !important; color: var(--pri) !important;
+}
+.stButton>button {
+  background: var(--pri); color: white; border-radius: 10px; border: 0; padding: 0.5rem 0.9rem;
+}
+.stButton>button:hover { filter: brightness(0.95); }
+div[role="group"] > div { padding: .25rem .25rem .25rem 0; }
+.block-container { padding-top: 1.2rem; }
+.card {
+  border:1px solid var(--border); background: var(--card);
+  border-radius:14px; padding:14px 16px; margin-bottom:12px;
+}
+.badge { display:inline-block; padding:.2rem .6rem; border-radius:9999px; background:var(--pri-2); color:var(--pri); font-size:.85rem; }
+.help { color: var(--mut); font-size:.9rem; }
+</style>
+""", unsafe_allow_html=True)
 
+# ============== CONFIG ==============
 CONFIG_PATH = os.path.join(".", "config.json")
 DEFAULT_CONFIG = {
     "alerts_path": "./AlertMe/alerts.jsonl",
     "max_alerts": 200,
     "ui": {
         "title": "AlertMe – Gestion des alertes",
-        "subtitle": "Immoweb/ImmoToma via URL; Immo-KH via filtres dédiés.",
+        "subtitle": "Immoweb / ImmoToma via URL; Immo-KH via filtres dédiés.",
         "show_labels": True
     },
     "sites": [
@@ -21,293 +57,194 @@ DEFAULT_CONFIG = {
         {"id": "marjorietome", "label": "ImmoToma (Marjorie Toma)", "host_contains": "immotoma.be"},
         {"id": "immokh",       "label": "Immo-KH",                  "host_contains": "immo-kh.be"}
     ],
-    "scraper_defaults": {
-        "pages": 20,
-        "order_keys": ["newest", "most_recent"]
-    }
+    "scraper_defaults": { "pages": 20, "order_keys": ["newest","most_recent"] }
 }
 
-def load_config():
-    if not os.path.isfile(CONFIG_PATH):
-        return DEFAULT_CONFIG
+def _load_cfg():
+    if not os.path.isfile(CONFIG_PATH): return DEFAULT_CONFIG
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-            def deep_merge(a, b):
-                if isinstance(a, dict) and isinstance(b, dict):
-                    out = dict(a)
-                    for k, v in b.items():
-                        out[k] = deep_merge(a.get(k), v) if k in a else v
-                    return out
-                return b if b is not None else a
-            return deep_merge(DEFAULT_CONFIG, cfg)
+        with open(CONFIG_PATH,"r",encoding="utf-8") as f: user = json.load(f)
+        def merge(a,b):
+            if isinstance(a,dict) and isinstance(b,dict):
+                z=dict(a); 
+                for k,v in b.items(): z[k]=merge(a.get(k),v) if k in a else v
+                return z
+            return b if b is not None else a
+        return merge(DEFAULT_CONFIG,user)
     except Exception:
         return DEFAULT_CONFIG
 
-CFG = load_config()
-ALERTS_PATH = CFG["alerts_path"]
-MAX_ALERTS = int(CFG["max_alerts"])
-SHOW_LABELS = bool(CFG.get("ui", {}).get("show_labels", True))
-SITES = CFG.get("sites", [])
-ORDER_KEYS = CFG.get("scraper_defaults", {}).get("order_keys", ["newest", "most_recent"])
-DEFAULT_PAGES = int(CFG.get("scraper_defaults", {}).get("pages", 20))
-IMMOWEB_HOST = "www.immoweb.be"
+CFG = _load_cfg()
+ALERTS_PATH   = CFG["alerts_path"]
+MAX_ALERTS    = int(CFG["max_alerts"])
+SHOW_LABELS   = bool(CFG.get("ui",{}).get("show_labels",True))
+SITES         = CFG.get("sites",[])
+ORDER_KEYS    = CFG.get("scraper_defaults",{}).get("order_keys",["newest","most_recent"])
+DEFAULT_PAGES = int(CFG.get("scraper_defaults",{}).get("pages",20))
+IMMOWEB_HOST  = "www.immoweb.be"
 
-# ====================== SECRETS GITHUB (SÛRS) ======================
-def _safe_secret(key: str):
-    try:
-        return st.secrets.get(key)  # type: ignore[attr-defined]
-    except Exception:
-        return None
+# ============== GITHUB SECRETS (safe) ==============
+def _sec(k):
+    try: return st.secrets.get(k)  # type: ignore[attr-defined]
+    except Exception: return None
 
-def _gh_token():
-    return _safe_secret("GH_TOKEN") or os.getenv("GH_TOKEN")
-
+def _gh_token(): return _sec("GH_TOKEN") or os.getenv("GH_TOKEN")
 def _gh_repo_cfg():
-    repo   = _safe_secret("GH_REPO")   or os.getenv("GH_REPO",  "ParraLuca/AlertMe")
-    path   = _safe_secret("GH_PATH")   or os.getenv("GH_PATH",  "AlertMe/alerts.jsonl")
-    branch = _safe_secret("GH_BRANCH") or os.getenv("GH_BRANCH","main")
-    return repo, path, branch
-
+    return (
+        _sec("GH_REPO") or os.getenv("GH_REPO","ParraLuca/AlertMe"),
+        _sec("GH_PATH") or os.getenv("GH_PATH","AlertMe/alerts.jsonl"),
+        _sec("GH_BRANCH") or os.getenv("GH_BRANCH","main")
+    )
 def _gh_headers():
-    tok = _gh_token()
-    if not tok:
-        raise RuntimeError("GH_TOKEN manquant.")
-    return {
-        "Authorization": f"token {tok}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+    tok=_gh_token()
+    if not tok: raise RuntimeError("GH_TOKEN manquant.")
+    return {"Authorization": f"token {tok}","Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28"}
 
 def gh_get_file():
-    repo, path, branch = _gh_repo_cfg()
-    url = f"https://api.github.com/repos/{repo}/contents/{path}"
-    r = requests.get(url, headers=_gh_headers(), params={"ref": branch})
-    if r.status_code == 404:
-        return None, None
+    repo,path,branch = _gh_repo_cfg()
+    r=requests.get(f"https://api.github.com/repos/{repo}/contents/{path}", headers=_gh_headers(), params={"ref":branch})
+    if r.status_code==404: return None,None
     r.raise_for_status()
-    data = r.json()
-    content = base64.b64decode(data["content"]).decode("utf-8")
-    sha = data["sha"]
-    return content, sha
+    data=r.json()
+    return base64.b64decode(data["content"]).decode("utf-8"), data["sha"]
 
-def gh_put_file(text: str, message: str):
-    repo, path, branch = _gh_repo_cfg()
-    _, sha = gh_get_file()
-    url = f"https://api.github.com/repos/{repo}/contents/{path}"
-    payload = {
-        "message": message,
-        "content": base64.b64encode(text.encode("utf-8")).decode("ascii"),
-        "branch": branch,
-    }
-    if sha:
-        payload["sha"] = sha
-    r = requests.put(url, headers=_gh_headers(), json=payload)
-    r.raise_for_status()
-    return r.json()
+def gh_put_file(text, message):
+    repo,path,branch = _gh_repo_cfg()
+    _,sha = gh_get_file()
+    payload={"message":message,"content":base64.b64encode(text.encode()).decode(),"branch":branch}
+    if sha: payload["sha"]=sha
+    r=requests.put(f"https://api.github.com/repos/{repo}/contents/{path}", headers=_gh_headers(), json=payload)
+    r.raise_for_status(); return r.json()
 
-def gh_append_line(line_text: str, message: str):
-    current, sha = gh_get_file()
+def gh_append_line(line_text, message):
+    current,sha = gh_get_file()
     if current is None:
-        new_text = line_text + "\n"
-        return gh_put_file(new_text, message)
-    if not current.endswith("\n"):
-        current += "\n"
-    new_text = current + line_text + "\n"
-    repo, path, branch = _gh_repo_cfg()
-    url = f"https://api.github.com/repos/{repo}/contents/{path}"
-    payload = {
-        "message": message,
-        "content": base64.b64encode(new_text.encode("utf-8")).decode("ascii"),
-        "branch": branch,
-        "sha": sha,
-    }
-    r = requests.put(url, headers=_gh_headers(), json=payload)
-    r.raise_for_status()
-    return r.json()
+        return gh_put_file(line_text+"\n", message)
+    if not current.endswith("\n"): current+="\n"
+    new_text=current+line_text+"\n"
+    repo,path,branch = _gh_repo_cfg()
+    payload={"message":message,"content":base64.b64encode(new_text.encode()).decode(),"branch":branch,"sha":sha}
+    r=requests.put(f"https://api.github.com/repos/{repo}/contents/{path}", headers=_gh_headers(), json=payload)
+    r.raise_for_status(); return r.json()
 
-# ====================== UTILS & CANONICALISATION ======================
-def is_valid_email(s: str) -> bool:
+# ============== UTILS / CANONICALISATION ==============
+def is_valid_email(s:str)->bool:
     return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", s.strip()))
 
-def utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def utc_iso(): return datetime.now(timezone.utc).isoformat()
 
-def canonicalize_immoweb_url(user_url: str) -> str:
-    u = urlparse(user_url)
-    if IMMOWEB_HOST not in (u.netloc or ""):
-        raise ValueError("Ce n'est pas une URL Immoweb.")
-    q = parse_qs(u.query)
-    q["orderBy"] = [ORDER_KEYS[0] if ORDER_KEYS else "newest"]
-    q.pop("page", None)
-    new_q = urlencode({k: v[0] for k, v in q.items()})
-    return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
+def canonicalize_immoweb_url(u_in:str)->str:
+    u=urlparse(u_in); 
+    if IMMOWEB_HOST not in (u.netloc or ""): raise ValueError("URL Immoweb invalide.")
+    q=parse_qs(u.query); q["orderBy"]=[ORDER_KEYS[0] if ORDER_KEYS else "newest"]; q.pop("page",None)
+    return urlunparse((u.scheme,u.netloc,u.path,u.params, urlencode({k:v[0] for k,v in q.items()}), u.fragment))
 
-def canonicalize_marjorietome_url(user_url: str) -> str:
-    u = urlparse(user_url)
-    q = parse_qs(u.query)
-    q.pop("paged", None)
-    new_q = urlencode({k: v[0] for k, v in q.items()})
-    return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
+def canonicalize_marjorietome_url(u_in:str)->str:
+    u=urlparse(u_in); q=parse_qs(u.query); q.pop("paged",None)
+    return urlunparse((u.scheme,u.netloc,u.path,u.params, urlencode({k:v[0] for k,v in q.items()}), u.fragment))
 
-def canonicalize_generic_url(user_url: str) -> str:
-    u = urlparse(user_url or "")
-    q = parse_qs(u.query)
-    for k in ("page", "paged"):
-        q.pop(k, None)
-    new_q = urlencode({k: (v[0] if isinstance(v, list) and v else v) for k, v in q.items()})
-    return urlunparse((u.scheme or "https", u.netloc, u.path, u.params, new_q, u.fragment))
+def canonicalize_generic_url(u_in:str)->str:
+    u=urlparse(u_in or ""); q=parse_qs(u.query)
+    for k in ("page","paged"): q.pop(k, None)
+    return urlunparse((u.scheme or "https", u.netloc, u.path, u.params, urlencode({k:(v[0] if isinstance(v,list) and v else v) for k,v in q.items()}), u.fragment))
 
-def canonicalize_by_site(site_id: str, user_url: str) -> str:
-    s = (site_id or "").strip().lower()
-    if s == "immoweb":
-        return canonicalize_immoweb_url(user_url)
-    if s == "marjorietome":
-        return canonicalize_marjorietome_url(user_url)
-    return canonicalize_generic_url(user_url)
-
-def host_ok_for_site(site_id: str, user_url: str) -> bool:
-    if (site_id or "").lower().strip() == "immokh" and not (user_url or "").strip():
-        return True  # URL optionnelle pour Immo-KH
-    try:
-        u = urlparse(user_url)
-        host = (u.netloc or "").lower()
-    except Exception:
-        return False
+def host_ok_for_site(site_id:str, user_url:str)->bool:
+    if site_id.lower()=="immokh": return True  # pas d'URL côté UI
+    try: host=(urlparse(user_url).netloc or "").lower()
+    except Exception: return False
     for s in SITES:
-        if s.get("id") == site_id:
-            needle = (s.get("host_contains") or "").lower().strip()
+        if s.get("id")==site_id:
+            needle=(s.get("host_contains") or "").lower().strip()
             return (needle in host) if needle else True
     return True
 
-# ====================== JOURNAL (alerts.jsonl) ======================
-def make_event(action: str, alert: dict) -> dict:
-    assert action in {"add","update","delete"}
-    ev = {"ts": utc_iso(), "action": action, "alert": {}}
-    for key in ("site","url","email","label","pages","filters","use_browser"):
-        if key in alert and alert[key] not in (None, ""):
-            ev["alert"][key] = alert[key]
+# ============== JOURNAL (alerts.jsonl) ==============
+def make_event(action:str, alert:dict)->dict:
+    ev={"ts":utc_iso(),"action":action,"alert":{}}
+    for k in ("site","url","email","label","pages","filters","use_browser"):
+        if k in alert and alert[k] not in (None,""): ev["alert"][k]=alert[k]
     return ev
 
-def append_event(action: str, alert: dict, commit_message: str):
-    ev = make_event(action, alert)
-    line_text = json.dumps(ev, ensure_ascii=False)
+def append_event(action:str, alert:dict, commit_message:str):
+    ev=make_event(action,alert); line=json.dumps(ev, ensure_ascii=False)
     if _gh_token():
-        try:
-            return gh_append_line(line_text, commit_message)
-        except Exception as e:
-            st.error(f"Append GitHub échoué: {e}")
-            return None
+        try: return gh_append_line(line, commit_message)
+        except Exception as e: st.error(f"Écriture GitHub échouée: {e}"); return None
     os.makedirs(os.path.dirname(ALERTS_PATH) or ".", exist_ok=True)
-    with open(ALERTS_PATH, "a", encoding="utf-8") as f:
-        f.write(line_text + "\n")
+    with open(ALERTS_PATH,"a",encoding="utf-8") as f: f.write(line+"\n")
     return True
 
-def _reduce_events_to_state(lines: list[dict]) -> list[dict]:
-    """Déduplique par (site|URL) + (Immo-KH: filtres JSON)."""
-    state: dict[str, dict] = {}
+def _reduce_events_to_state(lines:list[dict])->list[dict]:
+    state={}
     for row in lines:
-        if not isinstance(row, dict):
-            continue
-
-        # Ancien format
+        if not isinstance(row,dict): continue
         if "action" not in row or "alert" not in row:
-            a = row
-            site = (a.get("site") or "immoweb").strip().lower()
-            url_in = (a.get("url","") or "").strip()
-            if site == "immokh" and not url_in:
-                url_in = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
-            try:
-                canon = canonicalize_by_site(site, url_in)
-            except Exception:
-                canon = url_in
-            key = f"{site}|{canon}"
-            rec = {"site": site, "url": canon, "email": (a.get("email","") or "").strip()}
-            if SHOW_LABELS: rec["label"] = (a.get("label","") or "").strip()
-            if site == "immokh" and a.get("filters") is not None:
-                rec["filters"] = a["filters"]
-                key += "|" + json.dumps(a["filters"], sort_keys=True, ensure_ascii=False)
-            if a.get("pages") is not None: rec["pages"] = int(a["pages"])
-            if a.get("use_browser") is not None: rec["use_browser"] = bool(a["use_browser"])
-            state[key] = rec
+            a=row; site=(a.get("site") or "immoweb").strip().lower()
+            url=(a.get("url","") or "").strip()
+            if site=="immokh": url="https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
+            key=f"{site}|{url}"
+            rec={"site":site,"url":url,"email":(a.get("email","") or "").strip()}
+            if SHOW_LABELS: rec["label"]=(a.get("label","") or "").strip()
+            if a.get("pages") is not None: rec["pages"]=int(a["pages"])
+            if a.get("use_browser") is not None: rec["use_browser"]=bool(a["use_browser"])
+            if site=="immokh" and a.get("filters") is not None:
+                rec["filters"]=a["filters"]; key += "|"+json.dumps(a["filters"], sort_keys=True, ensure_ascii=False)
+            state[key]=rec
             continue
 
-        # Nouveau format
-        action = (row.get("action") or "").strip().lower()
-        a = row.get("alert", {}) or {}
-        site = (a.get("site") or "immoweb").strip().lower()
-        url_in = (a.get("url","") or "").strip()
-        if site == "immokh" and not url_in:
-            url_in = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
-        filters = a.get("filters")
-        filt_key = json.dumps(filters, sort_keys=True, ensure_ascii=False) if filters else ""
+        action=(row.get("action") or "").strip().lower()
+        a=row.get("alert") or {}
+        site=(a.get("site") or "immoweb").strip().lower()
+        url=(a.get("url","") or "").strip()
+        if site=="immokh": url="https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
+        filters=a.get("filters"); fkey=json.dumps(filters, sort_keys=True, ensure_ascii=False) if filters else ""
 
         if action in {"add","update"}:
-            try:
-                canon = canonicalize_by_site(site, url_in)
-            except Exception:
-                canon = url_in
-            key = f"{site}|{canon}"
-            rec = {"site": site, "url": canon, "email": (a.get("email","") or "").strip()}
-            if SHOW_LABELS: rec["label"] = (a.get("label","") or "").strip()
-            if filters is not None:
-                rec["filters"] = filters
-                key += f"|{filt_key}"
-            if a.get("pages") is not None: rec["pages"] = int(a["pages"])
-            if a.get("use_browser") is not None: rec["use_browser"] = bool(a["use_browser"])
-            state[key] = rec
-        elif action == "delete":
-            try:
-                canon = canonicalize_by_site(site, url_in) if url_in else url_in
-            except Exception:
-                canon = url_in
-            if site == "immokh" and not canon:
-                canon = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
-            key = f"{site}|{canon}"
-            if filt_key:
-                key += f"|{filt_key}"
+            key=f"{site}|{url}"
+            rec={"site":site,"url":url,"email":(a.get("email","") or "").strip()}
+            if SHOW_LABELS: rec["label"]=(a.get("label","") or "").strip()
+            if a.get("pages") is not None: rec["pages"]=int(a["pages"])
+            if a.get("use_browser") is not None: rec["use_browser"]=bool(a["use_browser"])
+            if filters is not None: rec["filters"]=filters; key += f"|{fkey}"
+            state[key]=rec
+        elif action=="delete":
+            key=f"{site}|{url}"; 
+            if fkey: key += f"|{fkey}"
             state.pop(key, None)
-
     return list(state.values())
 
 def load_alerts():
-    raw_lines = []
+    raw=[]
     if _gh_token():
         try:
-            content, _ = gh_get_file()
+            content,_=gh_get_file()
             if content:
-                for l in content.splitlines():
-                    l = l.strip()
-                    if l:
-                        try:
-                            raw_lines.append(json.loads(l))
-                        except json.JSONDecodeError:
-                            pass
-            return _reduce_events_to_state(raw_lines)
+                for line in content.splitlines():
+                    t=line.strip()
+                    if not t: continue
+                    try: raw.append(json.loads(t))
+                    except json.JSONDecodeError: pass
+            return _reduce_events_to_state(raw)
         except Exception as e:
-            st.error(f"Lecture GitHub échouée: {e}")
-            return []
-    if not os.path.isfile(ALERTS_PATH):
-        return []
-    with open(ALERTS_PATH, "r", encoding="utf-8") as f:
-        for l in f:
-            l = l.strip()
-            if l:
-                try:
-                    raw_lines.append(json.loads(l))
-                except json.JSONDecodeError:
-                    pass
-    return _reduce_events_to_state(raw_lines)
+            st.error(f"Lecture GitHub échouée: {e}"); return []
+    if not os.path.isfile(ALERTS_PATH): return []
+    with open(ALERTS_PATH,"r",encoding="utf-8") as f:
+        for line in f:
+            t=line.strip()
+            if not t: continue
+            try: raw.append(json.loads(t))
+            except json.JSONDecodeError: pass
+    return _reduce_events_to_state(raw)
 
-# ====================== UI HELPERS ======================
+# ============== UI HELPERS ==============
 IMMOKH_TYPES = [
     "maison","appartement","duplex","penthouse","terrain",
     "villa","studio","immeuble","commerce","bureau","industriel","garage"
 ]
 
-def filters_summary_str(filters: dict | None) -> str:
+def filters_summary_str(filters:dict|None)->str:
     if not filters: return "—"
-    parts = []
+    parts=[]
     if filters.get("property_types"): parts.append("Types: " + ", ".join(filters["property_types"]))
     if filters.get("cities"): parts.append("Villes: " + ", ".join(filters["cities"]))
     if (filters.get("price_min") is not None) or (filters.get("price_max") is not None):
@@ -315,282 +252,267 @@ def filters_summary_str(filters: dict | None) -> str:
     if filters.get("area_min") is not None: parts.append(f"≥{filters['area_min']} m²")
     if filters.get("bedrooms_min") is not None: parts.append(f"≥{filters['bedrooms_min']} ch.")
     if filters.get("bathrooms_min") is not None: parts.append(f"≥{filters['bathrooms_min']} sdb")
-    if filters.get("include_sold"): parts.append("incl. vendus")
+    # include_sold toujours False → on ne l’affiche pas
     return " · ".join(parts) if parts else "—"
 
-def ui_checkbox_matrix(title: str, options: list[str], defaults: list[str]) -> list[str]:
-    st.markdown(f"**{title}**")
+def checkbox_grid(options:list[str], defaults:list[str], key_prefix:str)->list[str]:
     cols = st.columns(3)
-    selected = set(defaults)
-    for i, opt in enumerate(options):
-        with cols[i % 3]:
-            if st.checkbox(opt.capitalize(), value=(opt in defaults), key=f"type_{title}_{i}"):
-                selected.add(opt)
-            else:
-                selected.discard(opt)
+    selected=set(defaults)
+    for i,opt in enumerate(options):
+        with cols[i%3]:
+            checked = st.checkbox(opt.capitalize(), value=(opt in defaults), key=f"{key_prefix}_{i}")
+            if checked: selected.add(opt)
+            else: selected.discard(opt)
     return sorted(selected)
 
-def immokh_filters_ui(default=None):
+def immokh_filters_ui(default:dict|None=None):
     d = default or {}
-    st.markdown("### Filtres Immo-KH")
-    st.caption("Immo-KH ne met pas les filtres dans l’URL. Ils sont stockés ici et appliqués par le scraper.")
-    # Types (cases à cocher)
+    st.markdown("#### Filtres Immo-KH")
+    st.markdown('<span class="help">Les filtres sont stockés et appliqués côté scraper. URL non requise.</span>', unsafe_allow_html=True)
+
+    # Types (checkbox grid)
     default_types = d.get("property_types") or ["maison","appartement","penthouse","terrain"]
-    property_types = ui_checkbox_matrix("Types de biens", IMMOKH_TYPES, default_types)
+    property_types = checkbox_grid(IMMOKH_TYPES, default_types, "kh_types")
 
-    # Villes
-    cities_txt = st.text_input(
-        "Villes (séparées par des virgules)",
-        value=",".join(d.get("cities", [])),
-        placeholder="ex: Tamines, Aiseau-Presles, Fosses-la-Ville"
-    )
-    cities = [c.strip() for c in (cities_txt or "").split(",") if c.strip()]
+    # Villes (CSV)
+    cities_txt = st.text_input("Villes (séparées par des virgules)", value=",".join(d.get("cities", [])),
+                               placeholder="ex: Tamines, Aiseau-Presles, Fosses-la-Ville")
 
-    # Grilles numériques min/max
+    # Min/Max — tous les 'min' initialisés à 0 (modifiable)
     colA, colB = st.columns(2)
     with colA:
-        price_min = st.number_input("Prix min (€)", min_value=0, step=1000, value=int(d.get("price_min") or 0))
-        bedrooms_min = st.number_input("Chambres min", min_value=0, step=1, value=int(d.get("bedrooms_min") or 0))
-        area_min = st.number_input("Surface min (m²)", min_value=0, step=5, value=int(d.get("area_min") or 0))
+        price_min     = st.number_input("Prix min (€)", min_value=0, step=1000, value=0)
+        bedrooms_min  = st.number_input("Chambres min", min_value=0, step=1, value=0)
+        area_min      = st.number_input("Surface min (m²)", min_value=0, step=5,  value=0)
     with colB:
-        price_max = st.number_input("Prix max (€)", min_value=0, step=1000, value=int(d.get("price_max") or 0))
-        bathrooms_min = st.number_input("Salles de bains min", min_value=0, step=1, value=int(d.get("bathrooms_min") or 0))
-        include_sold = st.checkbox("Inclure les biens vendus ?", value=bool(d.get("include_sold") or False))
+        price_max     = st.number_input("Prix max (€)", min_value=0, step=1000, value=int(d.get("price_max") or 0))
+        bathrooms_min = st.number_input("Salles de bains min", min_value=0, step=1, value=0)
+
+    # include_sold forcé à False (non modifiable)
+    st.markdown('<span class="badge">Biens vendus exclus</span> <span class="help">(fixe)</span>', unsafe_allow_html=True)
 
     return {
-        "property_types": property_types or [],
-        "cities": cities,
-        "price_min": int(price_min) if price_min else None,
-        "price_max": int(price_max) if price_max else None,
-        "bedrooms_min": int(bedrooms_min) if bedrooms_min else None,
-        "bathrooms_min": int(bathrooms_min) if bathrooms_min else None,
-        "area_min": int(area_min) if area_min else None,
-        "include_sold": bool(include_sold),
+        "property_types": property_types,
+        "cities": [c.strip() for c in (cities_txt or "").split(",") if c.strip()],
+        "price_min": int(price_min) if price_min is not None else 0,
+        "price_max": int(price_max) if price_max is not None else 0,
+        "bedrooms_min": int(bedrooms_min) if bedrooms_min is not None else 0,
+        "bathrooms_min": int(bathrooms_min) if bathrooms_min is not None else 0,
+        "area_min": int(area_min) if area_min is not None else 0,
+        "include_sold": False
     }
 
-# ====================== UI PRINCIPALE (TABS) ======================
+# ============== HEADER ==============
 st.title("🔔 " + CFG["ui"]["title"])
 st.caption(CFG["ui"]["subtitle"])
 
 if "alerts" not in st.session_state:
     st.session_state.alerts = load_alerts()
 
+# ============== TABS ==============
 tab_iw, tab_mt, tab_kh = st.tabs(["🏠 Immoweb", "🏷️ ImmoToma", "🏡 Immo-KH"])
 
-# -------- TAB IMMOWEB (URL-based) --------
+# ---- Immoweb (URL obligé) ----
 with tab_iw:
     with st.form("form_immoweb", clear_on_submit=True):
         st.subheader("Créer une alerte Immoweb")
         url = st.text_input("URL Immoweb (avec vos filtres)", placeholder="https://www.immoweb.be/fr/recherche/...")
-        email = st.text_input("Email de notification", placeholder="ex: prenom.nom@gmail.com")
+        email = st.text_input("Email", placeholder="ex: prenom.nom@gmail.com")
         pages = st.number_input("Pages max à collecter", min_value=1, max_value=200, value=DEFAULT_PAGES, step=1)
         label = st.text_input("Label (facultatif)") if SHOW_LABELS else ""
-        submitted = st.form_submit_button("Enregistrer")
-        if submitted:
+        ok = st.form_submit_button("Enregistrer")
+        if ok:
             if not url.strip():
                 st.error("L’URL est requise.")
             elif not email.strip() or not is_valid_email(email):
                 st.error("Email invalide.")
+            elif not host_ok_for_site("immoweb", url.strip()):
+                st.error("URL incohérente avec Immoweb.")
             else:
                 try:
                     canon = canonicalize_immoweb_url(url.strip())
-                    rec = {"site":"immoweb","url":canon,"email":email.strip(),"pages":int(pages)}
-                    if SHOW_LABELS: rec["label"] = label.strip()
-                    # clé dédup simple (site|url)
-                    key = f"immoweb|{canon}"
-                    exists = next((i for i,a in enumerate(st.session_state.alerts) if f"{a.get('site')}|{a.get('url')}"==key), None)
-                    if exists is not None:
-                        st.session_state.alerts[exists] = rec
-                        append_event("update", rec, "Update alert Immoweb")
+                    rec={"site":"immoweb","url":canon,"email":email.strip(),"pages":int(pages)}
+                    if SHOW_LABELS: rec["label"]=label.strip()
+                    key=f"immoweb|{canon}"
+                    idx=next((i for i,a in enumerate(st.session_state.alerts) if f"{a.get('site')}|{a.get('url')}"==key), None)
+                    if idx is not None:
+                        st.session_state.alerts[idx]=rec
+                        append_event("update", rec, "Update Immoweb")
                     else:
                         st.session_state.alerts.append(rec)
-                        append_event("add", rec, "Add alert Immoweb")
+                        append_event("add", rec, "Add Immoweb")
                     st.success("Alerte Immoweb enregistrée ✅")
                 except Exception as e:
                     st.error(f"Erreur: {e}")
 
-# -------- TAB IMMO TOMA (URL-based) --------
+# ---- ImmoToma (URL obligé) ----
 with tab_mt:
     with st.form("form_marjorietome", clear_on_submit=True):
         st.subheader("Créer une alerte ImmoToma (Marjorie Toma)")
         url = st.text_input("URL ImmoToma (avec vos filtres)", placeholder="https://immotoma.be/advanced-search/?...")
-        email = st.text_input("Email de notification", placeholder="ex: prenom.nom@gmail.com")
+        email = st.text_input("Email", placeholder="ex: prenom.nom@gmail.com")
         pages = st.number_input("Pages max à collecter", min_value=1, max_value=200, value=DEFAULT_PAGES, step=1)
         label = st.text_input("Label (facultatif)") if SHOW_LABELS else ""
-        submitted = st.form_submit_button("Enregistrer")
-        if submitted:
+        ok = st.form_submit_button("Enregistrer")
+        if ok:
             if not url.strip():
                 st.error("L’URL est requise.")
             elif not email.strip() or not is_valid_email(email):
                 st.error("Email invalide.")
+            elif not host_ok_for_site("marjorietome", url.strip()):
+                st.error("URL incohérente avec ImmoToma.")
             else:
                 try:
                     canon = canonicalize_marjorietome_url(url.strip())
-                    rec = {"site":"marjorietome","url":canon,"email":email.strip(),"pages":int(pages)}
-                    if SHOW_LABELS: rec["label"] = label.strip()
-                    key = f"marjorietome|{canon}"
-                    exists = next((i for i,a in enumerate(st.session_state.alerts) if f"{a.get('site')}|{a.get('url')}"==key), None)
-                    if exists is not None:
-                        st.session_state.alerts[exists] = rec
-                        append_event("update", rec, "Update alert ImmoToma")
+                    rec={"site":"marjorietome","url":canon,"email":email.strip(),"pages":int(pages)}
+                    if SHOW_LABELS: rec["label"]=label.strip()
+                    key=f"marjorietome|{canon}"
+                    idx=next((i for i,a in enumerate(st.session_state.alerts) if f"{a.get('site')}|{a.get('url')}"==key), None)
+                    if idx is not None:
+                        st.session_state.alerts[idx]=rec
+                        append_event("update", rec, "Update ImmoToma")
                     else:
                         st.session_state.alerts.append(rec)
-                        append_event("add", rec, "Add alert ImmoToma")
+                        append_event("add", rec, "Add ImmoToma")
                     st.success("Alerte ImmoToma enregistrée ✅")
                 except Exception as e:
                     st.error(f"Erreur: {e}")
 
-# -------- TAB IMMO-KH (Filters-based) --------
+# ---- Immo-KH (sans URL, browser forcé, vendus exclus, mins=0) ----
 with tab_kh:
     with st.form("form_immokh", clear_on_submit=True):
         st.subheader("Créer une alerte Immo-KH")
-        st.caption("L’URL est optionnelle (liste par défaut). Les filtres ci-dessous seront appliqués par le scraper.")
-        url = st.text_input(
-            "URL Immo-KH (optionnelle)",
-            placeholder="(laisser vide pour https://www.immo-kh.be/fr/2/chercher-bien/a-vendre)"
-        )
-        email = st.text_input("Email de notification", placeholder="ex: prenom.nom@gmail.com")
-        pages = st.number_input("Pages/clics max (navigateur ou HTTP)", min_value=1, max_value=200, value=DEFAULT_PAGES, step=1)
-        use_browser = st.checkbox("Préférer le navigateur (Playwright)", value=True, help="Recommandé pour un défilement ‘load more’ fiable.")
-        label = st.text_input("Label (facultatif)") if SHOW_LABELS else ""
+        st.markdown('<span class="help">Aucune URL nécessaire. Le navigateur (Playwright) est utilisé automatiquement.</span>', unsafe_allow_html=True)
 
-        filters_payload = immokh_filters_ui()
+        email = st.text_input("Email", placeholder="ex: prenom.nom@gmail.com")
+        pages = st.number_input("Pages / clics max (défilement)", min_value=1, max_value=200, value=DEFAULT_PAGES, step=1)
+        if SHOW_LABELS:
+            label = st.text_input("Label (facultatif)")
+        else:
+            label = ""
 
-        submitted = st.form_submit_button("Enregistrer")
-        if submitted:
+        # Filtres (mins init à 0) + vendus exclus (fixe) + use_browser True (fixe)
+        filters_payload = immokh_filters_ui(default={"price_min":0,"bedrooms_min":0,"bathrooms_min":0,"area_min":0,"include_sold":False})
+        use_browser = True  # forcé
+
+        ok = st.form_submit_button("Enregistrer")
+        if ok:
             if not email.strip() or not is_valid_email(email):
                 st.error("Email invalide.")
-            elif not host_ok_for_site("immokh", url.strip()):
-                st.error("URL incohérente avec Immo-KH.")
             else:
                 try:
-                    canon = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre" if not url.strip() else canonicalize_generic_url(url.strip())
+                    canon = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
                     rec = {
                         "site":"immokh",
                         "url":canon,
                         "email":email.strip(),
                         "pages":int(pages),
-                        "use_browser": bool(use_browser),
+                        "use_browser": True,
                         "filters": filters_payload
                     }
-                    if SHOW_LABELS: rec["label"] = label.strip()
-
-                    # clé dédup: site|url|filtersJSON
-                    fkey = json.dumps(filters_payload or {}, sort_keys=True, ensure_ascii=False)
-                    key = f"immokh|{canon}|{fkey}"
-                    exists = next((i for i,a in enumerate(st.session_state.alerts)
-                                   if (f"{a.get('site')}|{a.get('url')}|"+json.dumps(a.get('filters') or {}, sort_keys=True, ensure_ascii=False))==key), None)
-                    if exists is not None:
-                        st.session_state.alerts[exists] = rec
-                        append_event("update", rec, "Update alert Immo-KH")
+                    if SHOW_LABELS: rec["label"]=label.strip()
+                    fkey=json.dumps(filters_payload, sort_keys=True, ensure_ascii=False)
+                    key=f"immokh|{canon}|{fkey}"
+                    idx=next((i for i,a in enumerate(st.session_state.alerts)
+                              if (f"{a.get('site')}|{a.get('url')}|"+json.dumps(a.get('filters') or {}, sort_keys=True, ensure_ascii=False))==key), None)
+                    if idx is not None:
+                        st.session_state.alerts[idx]=rec
+                        append_event("update", rec, "Update Immo-KH")
                     else:
                         st.session_state.alerts.append(rec)
-                        append_event("add", rec, "Add alert Immo-KH")
+                        append_event("add", rec, "Add Immo-KH")
                     st.success("Alerte Immo-KH enregistrée ✅")
                 except Exception as e:
                     st.error(f"Erreur: {e}")
 
-# ====================== LISTE / ÉDITION DES ALERTES ======================
+# ============== LISTE / EDIT ==============
 st.divider()
 st.subheader("Mes alertes")
+if "alerts" not in st.session_state: st.session_state.alerts = load_alerts()
 
-def render_card(idx: int, a: dict):
-    site    = a.get("site","immoweb")
-    url     = a.get("url","")
-    email   = a.get("email","")
-    label   = a.get("label","") if SHOW_LABELS else ""
-    filters = a.get("filters")
-    pages   = a.get("pages")
-    use_br  = a.get("use_browser", None)
+def render_card(i:int, a:dict):
+    site=a.get("site","immoweb"); url=a.get("url",""); email=a.get("email","")
+    label=a.get("label","") if SHOW_LABELS else ""; filters=a.get("filters"); pages=a.get("pages")
+    use_br=a.get("use_browser", None)
 
-    with st.container(border=True):
-        st.markdown(f"**Site :** `{site}`")
-        if SHOW_LABELS and label:
-            st.markdown(f"**Label :** {label}")
-        st.markdown(f"**URL :** {url or '—'}")
+    with st.container():
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown(f"**Site :** `{site}`  " + (f"&nbsp;&nbsp;<span class='badge'>{label}</span>" if (SHOW_LABELS and label) else ""), unsafe_allow_html=True)
         st.markdown(f"**Email :** {email}")
+        if site != "immokh": st.markdown(f"**URL :** {url}")
         if pages: st.markdown(f"**Pages max :** {pages}")
-        if site == "immokh":
-            if use_br is not None:
-                st.markdown(f"**Préférer navigateur :** {'oui' if use_br else 'non'}")
+        if site=="immokh":
+            st.markdown("**Navigateur :** toujours activé (Playwright)")
             st.markdown(f"**Filtres :** {filters_summary_str(filters)}")
 
-        c1, c2 = st.columns([1,1])
+        c1,c2 = st.columns([1,1])
         with c1:
-            if st.button("✏️ Modifier", key=f"edit_{idx}"):
-                st.session_state[f"edit_mode_{idx}"] = True
+            if st.button("✏️ Modifier", key=f"edit_{i}"):
+                st.session_state[f"edit_{i}"]=True
         with c2:
-            if st.button("🗑️ Supprimer", key=f"del_{idx}"):
-                payload = {"site": site, "url": url}
-                if site == "immokh" and filters is not None:
-                    payload["filters"] = filters
-                append_event("delete", payload, "Delete alert from UI")
-                st.session_state.alerts = [x for j, x in enumerate(st.session_state.alerts) if j != idx]
+            if st.button("🗑️ Supprimer", key=f"del_{i}"):
+                payload={"site":site,"url":url}
+                if site=="immokh" and filters is not None: payload["filters"]=filters
+                append_event("delete", payload, "Delete alert UI")
+                st.session_state.alerts=[x for j,x in enumerate(st.session_state.alerts) if j!=i]
                 st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        # Édition inline
-        if st.session_state.get(f"edit_mode_{idx}", False):
-            with st.form(f"form_edit_{idx}"):
+        # EDIT
+        if st.session_state.get(f"edit_{i}", False):
+            with st.form(f"form_edit_{i}"):
                 st.markdown("_Le site n’est pas modifiable. Supprimez puis recréez pour changer de site._")
                 new_email = st.text_input("Email", value=email)
-                new_label = st.text_input("Label", value=label) if SHOW_LABELS else ""
-                new_url   = st.text_input("URL", value=url)
                 new_pages = st.number_input("Pages max", min_value=1, max_value=200, value=int(pages or DEFAULT_PAGES), step=1)
-                new_usebr = st.checkbox("Préférer le navigateur (Immo-KH)", value=bool(use_br) if use_br is not None else (site=="immokh"))
 
-                new_filters = filters
-                if site == "immokh":
-                    new_filters = immokh_filters_ui(default=filters)
+                # URL éditable uniquement pour Immoweb / ImmoToma
+                if site=="immokh":
+                    st.markdown("**URL :** fixée (liste Immo-KH)")
+                    new_url = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
+                    new_filters = immokh_filters_ui(default=filters or {"price_min":0,"bedrooms_min":0,"bathrooms_min":0,"area_min":0})
+                    new_usebr = True  # toujours
+                else:
+                    new_url = st.text_input("URL", value=url)
+                    new_filters = None
+                    new_usebr = None
 
-                ok = st.form_submit_button("Sauvegarder")
-                if ok:
+                new_label = st.text_input("Label", value=label) if SHOW_LABELS else ""
+
+                save = st.form_submit_button("Sauvegarder")
+                if save:
                     try:
                         if not is_valid_email(new_email):
                             st.warning("Email invalide.")
-                        elif not host_ok_for_site(site, new_url.strip()):
+                        elif site!="immokh" and not host_ok_for_site(site, new_url.strip()):
                             st.warning("URL incohérente avec le site.")
                         else:
-                            if site == "immokh" and not new_url.strip():
-                                canon2 = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
+                            if site=="immokh":
+                                canon2="https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
+                                edited={"site":site,"url":canon2,"email":new_email.strip(),"pages":int(new_pages),
+                                        "filters":new_filters, "use_browser":True}
                             else:
-                                # immoweb/marjorietome conservent leur canonicaliseur dédié
-                                canon2 = canonicalize_by_site(site, new_url.strip() or "")
-                            edited = {
-                                "site": site,
-                                "url": canon2,
-                                "email": new_email.strip(),
-                                "pages": int(new_pages),
-                                **({"label": new_label.strip()} if SHOW_LABELS else {})
-                            }
-                            if site == "immokh":
-                                edited["filters"] = new_filters
-                                edited["use_browser"] = bool(new_usebr)
+                                canon2 = canonicalize_immoweb_url(new_url.strip()) if site=="immoweb" else canonicalize_marjorietome_url(new_url.strip())
+                                edited={"site":site,"url":canon2,"email":new_email.strip(),"pages":int(new_pages)}
+                            if SHOW_LABELS: edited["label"]=new_label.strip()
 
-                            # Remplace et journalise
-                            st.session_state.alerts[idx] = edited
-                            append_event("update", edited, "Inline edit alert")
-                            st.session_state[f"edit_mode_{idx}"] = False
+                            st.session_state.alerts[i]=edited
+                            append_event("update", edited, "Inline edit")
+                            st.session_state[f"edit_{i}"]=False
                             st.success("Alerte mise à jour ✅")
                             st.rerun()
                     except Exception as e:
                         st.error(f"Erreur: {e}")
 
-# Affichage de toutes les alertes
-if not st.session_state.alerts:
+alerts = st.session_state.alerts
+if not alerts:
     st.info("Aucune alerte pour l’instant.")
 else:
-    for idx, a in enumerate(st.session_state.alerts):
-        render_card(idx, a)
+    for i,a in enumerate(alerts): render_card(i,a)
 
 st.divider()
 with st.expander("ℹ️ Aide"):
     st.markdown("""
-- **Immoweb / ImmoToma** : collez l’**URL** (leurs filtres restent dans l’URL).
-- **Immo-KH** : définissez les **filtres dédiés** (types par cases à cocher, villes, prix min/max, surface min, chambres min, SDB min).  
-  L’option **“Inclure vendus”** est décochée par défaut.
-- **Pages max** et **Préférer le navigateur** sont stockés avec l’alerte (Immo-KH).
-- Les alertes sont persistées dans **GitHub** si `GH_TOKEN` est présent, sinon **localement** dans `alerts.jsonl`.
-- Déduplication :  
-  - Immoweb/ImmoToma → `site|url canonique`  
-  - Immo-KH → `site|url canonique|JSON(filters)`
+- **Immoweb / ImmoToma** : collez l’URL (leurs filtres sont dans l’URL).
+- **Immo-KH** : aucune URL. Définissez les **filtres** (types, villes, prix min/max, surface min, chambres min, SDB min).  
+  *Les biens vendus sont **exclus par défaut** (fixe) et le **navigateur** est toujours utilisé.*
 """)
