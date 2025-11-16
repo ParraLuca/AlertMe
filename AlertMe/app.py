@@ -49,13 +49,14 @@ DEFAULT_CONFIG = {
     "max_alerts": 200,
     "ui": {
         "title": "AlertMe – Gestion des alertes",
-        "subtitle": "Immoweb / ImmoToma via URL; Immo-KH via filtres dédiés.",
+        "subtitle": "Immoweb / ImmoToma via URL; Immo-KH + AD-HOME via filtres dédiés.",
         "show_labels": True
     },
     "sites": [
         {"id": "immoweb",      "label": "Immoweb",                  "host_contains": "immoweb.be"},
         {"id": "marjorietome", "label": "ImmoToma (Marjorie Toma)", "host_contains": "immotoma.be"},
-        {"id": "immokh",       "label": "Immo-KH",                  "host_contains": "immo-kh.be"}
+        {"id": "immokh",       "label": "Immo-KH",                  "host_contains": "immo-kh.be"},
+        {"id": "adhome",       "label": "AD-HOME",                  "host_contains": "ad-home.be"}
     ],
     "scraper_defaults": { "pages": 20, "order_keys": ["newest","most_recent"] }
 }
@@ -66,7 +67,7 @@ def _load_cfg():
         with open(CONFIG_PATH,"r",encoding="utf-8") as f: user = json.load(f)
         def merge(a,b):
             if isinstance(a,dict) and isinstance(b,dict):
-                z=dict(a); 
+                z=dict(a)
                 for k,v in b.items(): z[k]=merge(a.get(k),v) if k in a else v
                 return z
             return b if b is not None else a
@@ -82,6 +83,11 @@ SITES         = CFG.get("sites",[])
 ORDER_KEYS    = CFG.get("scraper_defaults",{}).get("order_keys",["newest","most_recent"])
 DEFAULT_PAGES = int(CFG.get("scraper_defaults",{}).get("pages",20))
 IMMOWEB_HOST  = "www.immoweb.be"
+
+# URLs fixes pour sites sans URL côté UI
+IMMOKH_LIST   = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
+ADHOME_LIST   = "https://www.ad-home.be/fr/2/chercher-bien/a-vendre"
+BROWSER_SITES = {"immokh", "adhome"}  # sites avec navigateur forcé et filtres internes
 
 # ============== GITHUB SECRETS (safe) ==============
 def _sec(k):
@@ -134,7 +140,7 @@ def is_valid_email(s:str)->bool:
 def utc_iso(): return datetime.now(timezone.utc).isoformat()
 
 def canonicalize_immoweb_url(u_in:str)->str:
-    u=urlparse(u_in); 
+    u=urlparse(u_in)
     if IMMOWEB_HOST not in (u.netloc or ""): raise ValueError("URL Immoweb invalide.")
     q=parse_qs(u.query); q["orderBy"]=[ORDER_KEYS[0] if ORDER_KEYS else "newest"]; q.pop("page",None)
     return urlunparse((u.scheme,u.netloc,u.path,u.params, urlencode({k:v[0] for k,v in q.items()}), u.fragment))
@@ -149,7 +155,9 @@ def canonicalize_generic_url(u_in:str)->str:
     return urlunparse((u.scheme or "https", u.netloc, u.path, u.params, urlencode({k:(v[0] if isinstance(v,list) and v else v) for k,v in q.items()}), u.fragment))
 
 def host_ok_for_site(site_id:str, user_url:str)->bool:
-    if site_id.lower()=="immokh": return True  # pas d'URL côté UI
+    # Sites sans URL côté UI : toujours OK
+    if site_id.lower() in BROWSER_SITES: 
+        return True
     try: host=(urlparse(user_url).netloc or "").lower()
     except Exception: return False
     for s in SITES:
@@ -178,25 +186,29 @@ def _reduce_events_to_state(lines:list[dict])->list[dict]:
     state={}
     for row in lines:
         if not isinstance(row,dict): continue
+        # Ancien format
         if "action" not in row or "alert" not in row:
             a=row; site=(a.get("site") or "immoweb").strip().lower()
             url=(a.get("url","") or "").strip()
-            if site=="immokh": url="https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
+            if site=="immokh": url=IMMOKH_LIST
+            if site=="adhome": url=ADHOME_LIST
             key=f"{site}|{url}"
             rec={"site":site,"url":url,"email":(a.get("email","") or "").strip()}
             if SHOW_LABELS: rec["label"]=(a.get("label","") or "").strip()
             if a.get("pages") is not None: rec["pages"]=int(a["pages"])
             if a.get("use_browser") is not None: rec["use_browser"]=bool(a["use_browser"])
-            if site=="immokh" and a.get("filters") is not None:
+            if site in BROWSER_SITES and a.get("filters") is not None:
                 rec["filters"]=a["filters"]; key += "|"+json.dumps(a["filters"], sort_keys=True, ensure_ascii=False)
             state[key]=rec
             continue
 
+        # Nouveau format
         action=(row.get("action") or "").strip().lower()
         a=row.get("alert") or {}
         site=(a.get("site") or "immoweb").strip().lower()
         url=(a.get("url","") or "").strip()
-        if site=="immokh": url="https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
+        if site=="immokh": url=IMMOKH_LIST
+        if site=="adhome": url=ADHOME_LIST
         filters=a.get("filters"); fkey=json.dumps(filters, sort_keys=True, ensure_ascii=False) if filters else ""
 
         if action in {"add","update"}:
@@ -208,7 +220,7 @@ def _reduce_events_to_state(lines:list[dict])->list[dict]:
             if filters is not None: rec["filters"]=filters; key += f"|{fkey}"
             state[key]=rec
         elif action=="delete":
-            key=f"{site}|{url}"; 
+            key=f"{site}|{url}"
             if fkey: key += f"|{fkey}"
             state.pop(key, None)
     return list(state.values())
@@ -252,7 +264,6 @@ def filters_summary_str(filters:dict|None)->str:
     if filters.get("area_min") is not None: parts.append(f"≥{filters['area_min']} m²")
     if filters.get("bedrooms_min") is not None: parts.append(f"≥{filters['bedrooms_min']} ch.")
     if filters.get("bathrooms_min") is not None: parts.append(f"≥{filters['bathrooms_min']} sdb")
-    # include_sold toujours False → on ne l’affiche pas
     return " · ".join(parts) if parts else "—"
 
 def checkbox_grid(options:list[str], defaults:list[str], key_prefix:str)->list[str]:
@@ -265,30 +276,29 @@ def checkbox_grid(options:list[str], defaults:list[str], key_prefix:str)->list[s
             else: selected.discard(opt)
     return sorted(selected)
 
-def immokh_filters_ui(default:dict|None=None):
+def immokh_adhome_filters_ui(default:dict|None=None):
     d = default or {}
-    st.markdown("#### Filtres Immo-KH")
-    st.markdown('<span class="help">Les filtres sont stockés et appliqués côté scraper. URL non requise.</span>', unsafe_allow_html=True)
+    st.markdown("#### Filtres Immo-KH & AD-HOME")
+    st.markdown('<span class="help">Aucune URL nécessaire. Le navigateur (Playwright) est utilisé automatiquement pour les deux sites.</span>', unsafe_allow_html=True)
 
-    # Types (checkbox grid)
+    # Types
     default_types = d.get("property_types") or ["maison","appartement","penthouse","terrain"]
-    property_types = checkbox_grid(IMMOKH_TYPES, default_types, "kh_types")
+    property_types = checkbox_grid(IMMOKH_TYPES, default_types, "khadh_types")
 
-    # Villes (CSV)
+    # Villes
     cities_txt = st.text_input("Villes (séparées par des virgules)", value=",".join(d.get("cities", [])),
                                placeholder="ex: Tamines, Aiseau-Presles, Fosses-la-Ville")
 
     # Min/Max — tous les 'min' initialisés à 0 (modifiable)
     colA, colB = st.columns(2)
     with colA:
-        price_min     = st.number_input("Prix min (€)", min_value=0, step=1000, value=0)
-        bedrooms_min  = st.number_input("Chambres min", min_value=0, step=1, value=0)
-        area_min      = st.number_input("Surface min (m²)", min_value=0, step=5,  value=0)
+        price_min     = st.number_input("Prix min (€)", min_value=0, step=1000, value=0, key="khadh_price_min")
+        bedrooms_min  = st.number_input("Chambres min", min_value=0, step=1, value=0, key="khadh_bed_min")
+        area_min      = st.number_input("Surface min (m²)", min_value=0, step=5,  value=0, key="khadh_area_min")
     with colB:
-        price_max     = st.number_input("Prix max (€)", min_value=0, step=1000, value=int(d.get("price_max") or 0))
-        bathrooms_min = st.number_input("Salles de bains min", min_value=0, step=1, value=0)
+        price_max     = st.number_input("Prix max (€)", min_value=0, step=1000, value=int(d.get("price_max") or 0), key="khadh_price_max")
+        bathrooms_min = st.number_input("Salles de bains min", min_value=0, step=1, value=0, key="khadh_bath_min")
 
-    # include_sold forcé à False (non modifiable)
     st.markdown('<span class="badge">Biens vendus exclus</span> <span class="help">(fixe)</span>', unsafe_allow_html=True)
 
     return {
@@ -310,7 +320,7 @@ if "alerts" not in st.session_state:
     st.session_state.alerts = load_alerts()
 
 # ============== TABS ==============
-tab_iw, tab_mt, tab_kh = st.tabs(["🏠 Immoweb", "🏷️ ImmoToma", "🏡 Immo-KH"])
+tab_iw, tab_mt, tab_khadh = st.tabs(["🏠 Immoweb", "🏷️ ImmoToma", "🏡 Immo-KH + AD-HOME"])
 
 # ---- Immoweb (URL obligé) ----
 with tab_iw:
@@ -378,22 +388,19 @@ with tab_mt:
                 except Exception as e:
                     st.error(f"Erreur: {e}")
 
-# ---- Immo-KH (sans URL, browser forcé, vendus exclus, mins=0) ----
-with tab_kh:
-    with st.form("form_immokh", clear_on_submit=True):
-        st.subheader("Créer une alerte Immo-KH")
-        st.markdown('<span class="help">Aucune URL nécessaire. Le navigateur (Playwright) est utilisé automatiquement.</span>', unsafe_allow_html=True)
+# ---- Immo-KH + AD-HOME (sans URL, browser forcé, vendus exclus, mins=0) ----
+with tab_khadh:
+    with st.form("form_kh_adhome", clear_on_submit=True):
+        st.subheader("Créer une alerte Immo-KH + AD-HOME (doublon automatique)")
+        st.markdown('<span class="help">Aucune URL nécessaire. Le navigateur (Playwright) est utilisé automatiquement. Un enregistrement crée/maj 2 alertes identiques (Immo-KH & AD-HOME).</span>', unsafe_allow_html=True)
 
         email = st.text_input("Email", placeholder="ex: prenom.nom@gmail.com")
         pages = st.number_input("Pages / clics max (défilement)", min_value=1, max_value=200, value=DEFAULT_PAGES, step=1)
-        if SHOW_LABELS:
-            label = st.text_input("Label (facultatif)")
-        else:
-            label = ""
+        label = st.text_input("Label (facultatif)") if SHOW_LABELS else ""
 
         # Filtres (mins init à 0) + vendus exclus (fixe) + use_browser True (fixe)
-        filters_payload = immokh_filters_ui(default={"price_min":0,"bedrooms_min":0,"bathrooms_min":0,"area_min":0,"include_sold":False})
-        use_browser = True  # forcé
+        filters_payload = immokh_adhome_filters_ui(default={"price_min":0,"bedrooms_min":0,"bathrooms_min":0,"area_min":0,"include_sold":False})
+        use_browser = True  # forcé pour les deux
 
         ok = st.form_submit_button("Enregistrer")
         if ok:
@@ -401,27 +408,48 @@ with tab_kh:
                 st.error("Email invalide.")
             else:
                 try:
-                    canon = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
-                    rec = {
+                    # 1) Immo-KH
+                    rec_kh = {
                         "site":"immokh",
-                        "url":canon,
+                        "url":IMMOKH_LIST,
                         "email":email.strip(),
                         "pages":int(pages),
                         "use_browser": True,
                         "filters": filters_payload
                     }
-                    if SHOW_LABELS: rec["label"]=label.strip()
+                    if SHOW_LABELS: rec_kh["label"]=label.strip()
                     fkey=json.dumps(filters_payload, sort_keys=True, ensure_ascii=False)
-                    key=f"immokh|{canon}|{fkey}"
-                    idx=next((i for i,a in enumerate(st.session_state.alerts)
-                              if (f"{a.get('site')}|{a.get('url')}|"+json.dumps(a.get('filters') or {}, sort_keys=True, ensure_ascii=False))==key), None)
-                    if idx is not None:
-                        st.session_state.alerts[idx]=rec
-                        append_event("update", rec, "Update Immo-KH")
+                    key_kh=f"immokh|{IMMOKH_LIST}|{fkey}"
+                    idx_kh=next((i for i,a in enumerate(st.session_state.alerts)
+                                 if (f"{a.get('site')}|{a.get('url')}|"+json.dumps(a.get('filters') or {}, sort_keys=True, ensure_ascii=False))==key_kh), None)
+                    if idx_kh is not None:
+                        st.session_state.alerts[idx_kh]=rec_kh
+                        append_event("update", rec_kh, "Update Immo-KH")
                     else:
-                        st.session_state.alerts.append(rec)
-                        append_event("add", rec, "Add Immo-KH")
-                    st.success("Alerte Immo-KH enregistrée ✅")
+                        st.session_state.alerts.append(rec_kh)
+                        append_event("add", rec_kh, "Add Immo-KH")
+
+                    # 2) AD-HOME (copie 1:1)
+                    rec_ad = {
+                        "site":"adhome",
+                        "url":ADHOME_LIST,
+                        "email":email.strip(),
+                        "pages":int(pages),
+                        "use_browser": True,
+                        "filters": filters_payload
+                    }
+                    if SHOW_LABELS: rec_ad["label"]=label.strip()
+                    key_ad=f"adhome|{ADHOME_LIST}|{fkey}"
+                    idx_ad=next((i for i,a in enumerate(st.session_state.alerts)
+                                 if (f"{a.get('site')}|{a.get('url')}|"+json.dumps(a.get('filters') or {}, sort_keys=True, ensure_ascii=False))==key_ad), None)
+                    if idx_ad is not None:
+                        st.session_state.alerts[idx_ad]=rec_ad
+                        append_event("update", rec_ad, "Update AD-HOME")
+                    else:
+                        st.session_state.alerts.append(rec_ad)
+                        append_event("add", rec_ad, "Add AD-HOME")
+
+                    st.success("Alertes Immo-KH & AD-HOME enregistrées ✅")
                 except Exception as e:
                     st.error(f"Erreur: {e}")
 
@@ -439,9 +467,9 @@ def render_card(i:int, a:dict):
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown(f"**Site :** `{site}`  " + (f"&nbsp;&nbsp;<span class='badge'>{label}</span>" if (SHOW_LABELS and label) else ""), unsafe_allow_html=True)
         st.markdown(f"**Email :** {email}")
-        if site != "immokh": st.markdown(f"**URL :** {url}")
+        if site not in BROWSER_SITES: st.markdown(f"**URL :** {url}")
         if pages: st.markdown(f"**Pages max :** {pages}")
-        if site=="immokh":
+        if site in BROWSER_SITES:
             st.markdown("**Navigateur :** toujours activé (Playwright)")
             st.markdown(f"**Filtres :** {filters_summary_str(filters)}")
 
@@ -452,7 +480,7 @@ def render_card(i:int, a:dict):
         with c2:
             if st.button("🗑️ Supprimer", key=f"del_{i}"):
                 payload={"site":site,"url":url}
-                if site=="immokh" and filters is not None: payload["filters"]=filters
+                if site in BROWSER_SITES and filters is not None: payload["filters"]=filters
                 append_event("delete", payload, "Delete alert UI")
                 st.session_state.alerts=[x for j,x in enumerate(st.session_state.alerts) if j!=i]
                 st.rerun()
@@ -465,12 +493,12 @@ def render_card(i:int, a:dict):
                 new_email = st.text_input("Email", value=email)
                 new_pages = st.number_input("Pages max", min_value=1, max_value=200, value=int(pages or DEFAULT_PAGES), step=1)
 
-                # URL éditable uniquement pour Immoweb / ImmoToma
-                if site=="immokh":
-                    st.markdown("**URL :** fixée (liste Immo-KH)")
-                    new_url = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
-                    new_filters = immokh_filters_ui(default=filters or {"price_min":0,"bedrooms_min":0,"bathrooms_min":0,"area_min":0})
-                    new_usebr = True  # toujours
+                if site in BROWSER_SITES:
+                    st.markdown("**URL :** fixée (liste du site)")
+                    fixed_url = IMMOKH_LIST if site=="immokh" else ADHOME_LIST
+                    new_url = fixed_url
+                    new_filters = immokh_adhome_filters_ui(default=filters or {"price_min":0,"bedrooms_min":0,"bathrooms_min":0,"area_min":0})
+                    new_usebr = True
                 else:
                     new_url = st.text_input("URL", value=url)
                     new_filters = None
@@ -483,12 +511,11 @@ def render_card(i:int, a:dict):
                     try:
                         if not is_valid_email(new_email):
                             st.warning("Email invalide.")
-                        elif site!="immokh" and not host_ok_for_site(site, new_url.strip()):
+                        elif site not in BROWSER_SITES and not host_ok_for_site(site, new_url.strip()):
                             st.warning("URL incohérente avec le site.")
                         else:
-                            if site=="immokh":
-                                canon2="https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
-                                edited={"site":site,"url":canon2,"email":new_email.strip(),"pages":int(new_pages),
+                            if site in BROWSER_SITES:
+                                edited={"site":site,"url":new_url,"email":new_email.strip(),"pages":int(new_pages),
                                         "filters":new_filters, "use_browser":True}
                             else:
                                 canon2 = canonicalize_immoweb_url(new_url.strip()) if site=="immoweb" else canonicalize_marjorietome_url(new_url.strip())
@@ -513,6 +540,6 @@ st.divider()
 with st.expander("ℹ️ Aide"):
     st.markdown("""
 - **Immoweb / ImmoToma** : collez l’URL (leurs filtres sont dans l’URL).
-- **Immo-KH** : aucune URL. Définissez les **filtres** (types, villes, prix min/max, surface min, chambres min, SDB min).  
-  *Les biens vendus sont **exclus par défaut** (fixe) et le **navigateur** est toujours utilisé.*
+- **Immo-KH + AD-HOME** : **une seule configuration** de filtres → l’app crée/maintient **deux alertes** (une sur chaque site).  
+  *Biens vendus **exclus**, **navigateur toujours activé**, et tous les **minimums à 0** par défaut.*
 """)

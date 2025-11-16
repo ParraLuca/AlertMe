@@ -3,6 +3,11 @@
 """
 batch_alertme.py
 Exécute en série les alertes (Site ↔ URL ↔ Email) définies dans un JSONL (journal d'événements).
+
+Adaptations:
+- Support explicite d'AD-HOME (mêmes facilités qu'Immo-KH) :
+  * URL vide autorisée → on force l'URL liste canonique via alertme_adhome.canonicalize_list_url(None)
+  * Canonicalisation site-spécifique si disponible dans le module alertme_{site}
 """
 
 import argparse, json, logging, os, sys, subprocess, importlib, inspect
@@ -36,6 +41,8 @@ def git_pull_repo(start_dir: str) -> None:
         logging.error("Git: pull a échoué (code %s). On continue avec l'état local.", e.returncode)
 
 # ---------- Canonicalisation URL ----------
+SITES_ALLOW_EMPTY_URL = {"immokh", "adhome"}  # sites où on accepte URL vide et on force l’URL liste
+
 def _fallback_canonicalize(url: str) -> str:
     from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
     url = (url or "").strip()
@@ -50,28 +57,38 @@ def _fallback_canonicalize(url: str) -> str:
     except Exception:
         return url
 
-def _canon_immokh_if_empty(site: str, url: str) -> str:
-    """Pour Immo-KH, autoriser URL vide → forcer URL liste canonique."""
-    if (site or "").lower().strip() != "immokh":
+def _canon_site_if_empty(site: str, url: str) -> str:
+    """
+    Pour les sites listés dans SITES_ALLOW_EMPTY_URL, si URL vide → on appelle canonicalize_list_url(None)
+    du module alertme_{site}, sinon on renvoie l'URL telle quelle.
+    """
+    if (site or "").lower().strip() not in SITES_ALLOW_EMPTY_URL or (url or "").strip():
         return url
     try:
-        mod = importlib.import_module("alertme_immokh")
-        return getattr(mod, "canonicalize_list_url")(url or None)
+        mod = importlib.import_module(f"alertme_{site}")
+        return getattr(mod, "canonicalize_list_url")(None)
     except Exception:
-        return "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
+        # garde-fous explicites pour immokh/adhome si le module n'est pas importable
+        if site == "immokh":
+            return "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
+        if site == "adhome":
+            return "https://www.ad-home.be/fr/2/chercher-bien/a-vendre"
+        return url
 
 def canonicalize(site: str, url: str) -> str:
-    """Essaie d’appeler une fonction de canonicalisation spécifique au module du site, sinon fallback.
-       Immo-KH: autorise URL vide → canonicalize_list_url().
+    """
+    Essaie d’appeler une fonction de canonicalisation spécifique au module du site, sinon fallback.
+    Sites autorisant URL vide → on remplit d’abord via _canon_site_if_empty().
     """
     site = (site or "immoweb").strip().lower()
-    url = _canon_immokh_if_empty(site, url)
+    url = _canon_site_if_empty(site, url)
 
     try:
         mod = importlib.import_module(f"alertme_{site}")
     except Exception:
         return _fallback_canonicalize(url)
 
+    # Cherche une fonction de canonicalisation explicite dans le module (ex: canonicalize_list_url)
     for name in dir(mod):
         if name.startswith("canonicalize") and "url" in name:
             fn = getattr(mod, name)
@@ -84,7 +101,11 @@ def canonicalize(site: str, url: str) -> str:
 
 # ---------- Lecture & réduction JSONL ----------
 def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]:
-    """Rejoue le journal -> état courant. Clé de dédup: (site, canon_url) ou [immokh] (site, canon_url, filters_JSON)."""
+    """
+    Rejoue le journal -> état courant.
+    Clé de dédup: (site, canon_url) + éventuellement filters_JSON.
+    Pour sites 'immokh' et 'adhome', l’URL peut être vide → on injecte l’URL canonique.
+    """
     state: Dict[str, dict] = {}
 
     for i, row in enumerate(lines, 1):
@@ -97,12 +118,15 @@ def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]
             site = (row.get("site") or "immoweb").strip().lower()
             url = (row.get("url") or "").strip()
             email = (row.get("email") or "").strip()
-            if site == "immokh" and not url:
-                url = _canon_immokh_if_empty(site, url)
             if not email:
                 logging.warning("Ligne %d: ancien format sans email -> ignorée.", i)
                 continue
-            key_url = canonicalize(site, url)
+            # autorise URL vide pour sites spéciaux
+            url = _canon_site_if_empty(site, url)
+            key_url = canonicalize(site, url) if url else ""
+            if not key_url:
+                logging.warning("Ligne %d: ancien format sans URL exploitable -> ignorée.", i)
+                continue
             pages = int(row.get("pages", default_pages) or default_pages)
             key = f"{site}|{key_url}"
             state[key] = {"site": site, "url": key_url, "email": email, "pages": pages}
@@ -117,13 +141,12 @@ def _reduce_events_to_items(lines: List[dict], default_pages: int) -> List[dict]
 
         site = (alert.get("site") or "immoweb").strip().lower()
         url = (alert.get("url") or "").strip()
-        if site == "immokh" and not url:
-            url = _canon_immokh_if_empty(site, url)
-        key_url = canonicalize(site, url) if (url or site == "immokh") else ""
+        # autorise URL vide pour sites spéciaux
+        url = _canon_site_if_empty(site, url)
+        key_url = canonicalize(site, url) if url else ""
 
         filters = alert.get("filters") or {}
         use_browser = alert.get("use_browser")
-
         filters_json_key = json.dumps(filters, sort_keys=True, ensure_ascii=False) if filters else ""
 
         if action in {"add", "update"}:
@@ -189,10 +212,10 @@ def read_jsonl_effective_items(path: str, default_pages: int) -> List[dict]:
         filters = it.get("filters")
         use_browser = it.get("use_browser")
 
-        if site == "immokh" and not url:
-            url = _canon_immokh_if_empty(site, url)
+        # autorise URL vide pour les sites spéciaux
+        url = _canon_site_if_empty(site, url)
 
-        if site and (url or site == "immokh") and email:
+        if site and url and email:
             rec = {"site": site, "url": url, "email": email, "pages": pages}
             if filters is not None:
                 rec["filters"] = filters

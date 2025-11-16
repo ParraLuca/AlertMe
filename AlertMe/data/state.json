@@ -376,10 +376,31 @@
         "21162254",
         "21162774",
         "21164307",
-        "21165759"
+        "21165759",
+        "21166718",
+        "21166891",
+        "21166902",
+        "21167026"
       ],
-      "last_run_utc": "2025-11-14T16:25:05.699854+00:00",
+      "last_run_utc": "2025-11-16T17:23:33.354345+00:00",
       "email": "andrea.parragabarron@gmail.com"
+    },
+    "https://www.immoweb.be/fr/recherche/terrain/a-vendre/jemeppe-sur-sambre/5190?countries=BE&priceType=PRICE&maxPrice=50000&orderBy=newest": {
+      "created_at_utc": "2025-11-14T18:24:59.575784+00:00",
+      "seen_codes": [
+        "20005063",
+        "20005111",
+        "20005189",
+        "20271920",
+        "20284096",
+        "20669638",
+        "20684722",
+        "20806095",
+        "20813275",
+        "21115895"
+      ],
+      "last_run_utc": "2025-11-16T17:24:57.693317+00:00",
+      "email": "luca.parragabarron@gmail.com"
     }
   }
 }
