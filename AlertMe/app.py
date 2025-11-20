@@ -6,601 +6,396 @@ import streamlit as st
 
 # ============== CONFIG & THEME ==============
 st.set_page_config(
-    page_title="AlertMe – Dashboard",
+    page_title="AlertMe – Mon Tableau de Bord",
     page_icon="🔔",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# CSS MODERNE & ÉPURÉ
+# CSS MODERNE & UI
 st.markdown("""
 <style>
-    /* Variables globales */
+    /* Variables & Thème */
     :root {
-        --primary: #4f46e5;       /* Indigo 600 */
-        --primary-light: #e0e7ff; /* Indigo 100 */
-        --text-dark: #1e293b;     /* Slate 800 */
-        --text-gray: #64748b;     /* Slate 500 */
-        --bg-card: #ffffff;
-        --border-color: #e2e8f0;  /* Slate 200 */
-        --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-        --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        --primary: #6366f1;       /* Indigo 500 */
+        --primary-dark: #4338ca;  /* Indigo 700 */
+        --bg-soft: #f8fafc;       /* Slate 50 */
+        --text-main: #0f172a;     /* Slate 900 */
+        --text-muted: #64748b;    /* Slate 500 */
+        --card-bg: #ffffff;
+        --border: #e2e8f0;
     }
 
-    /* Structure globale */
-    .block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 800px; }
-    h1, h2, h3 { color: var(--text-dark); font-weight: 700; letter-spacing: -0.025em; }
+    /* Global */
+    .block-container { padding-top: 2rem; max-width: 850px; }
     
-    /* Stylisation des Inputs Streamlit */
-    .stTextInput input, .stNumberInput input {
-        border-radius: 8px; border: 1px solid var(--border-color);
+    /* Header "Identity" Section */
+    .identity-box {
+        background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+        padding: 1.5rem;
+        border-radius: 12px;
+        color: white;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.2);
     }
-    .stTextInput input:focus, .stNumberInput input:focus {
-        border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-light);
+    .identity-box h2 { color: white !important; margin: 0 0 0.5rem 0; font-size: 1.5rem; }
+    .identity-box p { color: #e0e7ff; margin: 0; font-size: 0.9rem; }
+    .stTextInput input {
+        border: 2px solid var(--border);
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
     }
-    
-    /* Tabs personnalisés */
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 6px; padding: 8px 16px; font-weight: 500; color: var(--text-gray); border: none; background: transparent;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: var(--primary-light); color: var(--primary); font-weight: 600;
+    .stTextInput input:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
     }
 
-    /* Cartes d'alertes */
-    .alert-card {
-        background: var(--bg-card);
-        border: 1px solid var(--border-color);
+    /* Section Création (Always Visible) */
+    .create-section {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
         border-radius: 12px;
         padding: 20px;
-        margin-bottom: 16px;
-        box-shadow: var(--shadow-sm);
-        transition: all 0.2s ease;
-        position: relative;
+        margin-bottom: 2rem;
     }
-    .alert-card:hover {
-        box-shadow: var(--shadow-md);
-        border-color: #cbd5e1;
-    }
-    .alert-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-    .alert-site { font-weight: 700; font-size: 1.1rem; color: var(--text-dark); display: flex; align-items: center; gap: 8px; }
-    .alert-label { background: var(--primary-light); color: var(--primary); padding: 2px 8px; border-radius: 99px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-    .alert-details { font-size: 0.9rem; color: var(--text-gray); line-height: 1.5; }
-    .alert-details strong { color: var(--text-dark); font-weight: 600; }
-    
-    /* Badges pour filtres */
-    .filter-tag {
-        display: inline-block; background: #f1f5f9; color: #475569; 
-        padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; margin-right: 4px; margin-bottom: 4px; border: 1px solid #e2e8f0;
+    .create-title {
+        font-weight: 700;
+        color: var(--text-main);
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
     }
 
-    /* Boutons */
-    .stButton > button {
-        border-radius: 8px; font-weight: 500; transition: all 0.2s; border: none;
+    /* Tabs Custom */
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; border-bottom: 1px solid var(--border); }
+    .stTabs [data-baseweb="tab"] {
+        background: transparent; border: none; font-weight: 500; color: var(--text-muted);
     }
-    .stButton > button:hover { transform: translateY(-1px); }
+    .stTabs [aria-selected="true"] {
+        color: var(--primary); border-bottom: 2px solid var(--primary);
+    }
+
+    /* Cartes Alertes */
+    .alert-card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-left: 4px solid var(--primary);
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 12px;
+        transition: transform 0.2s;
+    }
+    .alert-card:hover { border-color: var(--primary-dark); transform: translateY(-1px); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
     
-    /* Aide visuelle */
-    .info-box { background: #f8fafc; border-left: 4px solid var(--primary); padding: 12px; border-radius: 0 8px 8px 0; color: var(--text-gray); font-size: 0.9rem; margin-bottom: 1rem; }
+    /* Badges */
+    .badge-site { 
+        font-size: 0.75rem; font-weight: 700; text-transform: uppercase; 
+        padding: 2px 8px; border-radius: 4px; background: #e0e7ff; color: var(--primary-dark);
+    }
+    .badge-filter {
+        display: inline-flex; align-items: center; background: #f1f5f9; color: #475569; 
+        padding: 2px 8px; border-radius: 99px; font-size: 0.75rem; margin: 2px; border: 1px solid #e2e8f0;
+    }
+    
+    /* Empty State */
+    .empty-state {
+        text-align: center; padding: 3rem 1rem; color: var(--text-muted);
+        background: var(--bg-soft); border-radius: 12px; border: 2px dashed var(--border);
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# ============== LOGIQUE METIER ==============
+# ============== CONFIG & UTILS ==============
 CONFIG_PATH = os.path.join(".", "config.json")
 DEFAULT_CONFIG = {
     "alerts_path": "./AlertMe/alerts.jsonl",
     "max_alerts": 200,
-    "ui": { "title": "AlertMe", "subtitle": "Gestionnaire d'alertes immobilières", "show_labels": True },
+    "ui": { "title": "AlertMe", "show_labels": True },
     "sites": [
-        {"id": "immoweb", "label": "Immoweb", "host_contains": "immoweb.be"},
-        {"id": "marjorietome", "label": "ImmoToma", "host_contains": "immotoma.be"},
-        {"id": "immokh", "label": "Immo-KH", "host_contains": "immo-kh.be"},
-        {"id": "adhome", "label": "AD-HOME", "host_contains": "ad-home.be"}
+        {"id": "immoweb", "host_contains": "immoweb.be"},
+        {"id": "marjorietome", "host_contains": "immotoma.be"},
+        {"id": "immokh", "host_contains": "immo-kh.be"},
+        {"id": "adhome", "host_contains": "ad-home.be"}
     ],
-    "scraper_defaults": { "pages": 20, "order_keys": ["newest","most_recent"] }
+    "scraper_defaults": { "pages": 20, "order_keys": ["newest"] }
 }
 
+# Chargement Config
 def _load_cfg():
     if not os.path.isfile(CONFIG_PATH): return DEFAULT_CONFIG
     try:
-        with open(CONFIG_PATH,"r",encoding="utf-8") as f: user = json.load(f)
-        def merge(a,b):
-            if isinstance(a,dict) and isinstance(b,dict):
-                z=dict(a)
-                for k,v in b.items(): z[k]=merge(a.get(k),v) if k in a else v
-                return z
-            return b if b is not None else a
-        return merge(DEFAULT_CONFIG,user)
-    except Exception: return DEFAULT_CONFIG
+        with open(CONFIG_PATH,"r",encoding="utf-8") as f: return json.load(f)
+    except: return DEFAULT_CONFIG
 
 CFG = _load_cfg()
-ALERTS_PATH = CFG["alerts_path"]
-MAX_ALERTS = int(CFG["max_alerts"])
-SHOW_LABELS = bool(CFG.get("ui",{}).get("show_labels",True))
-SITES = CFG.get("sites",[])
-ORDER_KEYS = CFG.get("scraper_defaults",{}).get("order_keys",["newest","most_recent"])
-DEFAULT_PAGES = int(CFG.get("scraper_defaults",{}).get("pages",20))
+ALERTS_PATH = CFG.get("alerts_path", "./AlertMe/alerts.jsonl")
+MAX_ALERTS = int(CFG.get("max_alerts", 200))
+SITES = CFG.get("sites", [])
+BROWSER_SITES = {"immokh", "adhome"}
 IMMOWEB_HOST = "www.immoweb.be"
 IMMOKH_LIST = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
 ADHOME_LIST = "https://www.ad-home.be/fr/2/chercher-bien/a-vendre"
-BROWSER_SITES = {"immokh", "adhome"}
 
-# Github Helper
+# Github
 def _sec(k):
     try: return st.secrets.get(k)
-    except Exception: return None
+    except: return os.getenv(k)
 
-def _gh_token(): return _sec("GH_TOKEN") or os.getenv("GH_TOKEN")
-def _gh_repo_cfg():
-    return (
-        _sec("GH_REPO") or os.getenv("GH_REPO","ParraLuca/AlertMe"),
-        _sec("GH_PATH") or os.getenv("GH_PATH","AlertMe/alerts.jsonl"),
-        _sec("GH_BRANCH") or os.getenv("GH_BRANCH","main")
-    )
 def _gh_headers():
-    tok=_gh_token()
-    if not tok: raise RuntimeError("GH_TOKEN manquant.")
+    tok = _sec("GH_TOKEN")
+    if not tok: return None
     return {"Authorization": f"token {tok}","Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28"}
 
 def gh_get_file():
-    repo,path,branch = _gh_repo_cfg()
-    r=requests.get(f"https://api.github.com/repos/{repo}/contents/{path}", headers=_gh_headers(), params={"ref":branch})
-    if r.status_code==404: return None,None
-    r.raise_for_status()
-    data=r.json()
-    return base64.b64decode(data["content"]).decode("utf-8"), data["sha"]
+    headers = _gh_headers()
+    if not headers: return None, None
+    repo, path = _sec("GH_REPO") or "ParraLuca/AlertMe", _sec("GH_PATH") or "AlertMe/alerts.jsonl"
+    branch = _sec("GH_BRANCH") or "main"
+    r = requests.get(f"https://api.github.com/repos/{repo}/contents/{path}", headers=headers, params={"ref":branch})
+    if r.status_code == 200:
+        data = r.json()
+        return base64.b64decode(data["content"]).decode("utf-8"), data["sha"]
+    return None, None
 
-def gh_put_file(text, message):
-    repo,path,branch = _gh_repo_cfg()
-    _,sha = gh_get_file()
-    payload={"message":message,"content":base64.b64encode(text.encode()).decode(),"branch":branch}
-    if sha: payload["sha"]=sha
-    r=requests.put(f"https://api.github.com/repos/{repo}/contents/{path}", headers=_gh_headers(), json=payload)
-    r.raise_for_status(); return r.json()
+def gh_append_line(line, msg):
+    headers = _gh_headers()
+    if not headers: return None
+    repo, path = _sec("GH_REPO") or "ParraLuca/AlertMe", _sec("GH_PATH") or "AlertMe/alerts.jsonl"
+    branch = _sec("GH_BRANCH") or "main"
+    current, sha = gh_get_file()
+    content = (current + line + "\n") if current else (line + "\n")
+    payload = {
+        "message": msg,
+        "content": base64.b64encode(content.encode()).decode(),
+        "branch": branch
+    }
+    if sha: payload["sha"] = sha
+    requests.put(f"https://api.github.com/repos/{repo}/contents/{path}", headers=headers, json=payload).raise_for_status()
+    return True
 
-def gh_append_line(line_text, message):
-    current,sha = gh_get_file()
-    if current is None: return gh_put_file(line_text+"\n", message)
-    if not current.endswith("\n"): current+="\n"
-    new_text=current+line_text+"\n"
-    repo,path,branch = _gh_repo_cfg()
-    payload={"message":message,"content":base64.b64encode(new_text.encode()).decode(),"branch":branch,"sha":sha}
-    r=requests.put(f"https://api.github.com/repos/{repo}/contents/{path}", headers=_gh_headers(), json=payload)
-    r.raise_for_status(); return r.json()
-
-# Validations
-def is_valid_email(s:str)->bool: return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", s.strip()))
+# Helpers Métier
+def is_valid_email(s): return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", str(s).strip()))
 def utc_iso(): return datetime.now(timezone.utc).isoformat()
 
-def canonicalize_immoweb_url(u_in:str)->str:
-    u=urlparse(u_in)
-    if IMMOWEB_HOST not in (u.netloc or ""): raise ValueError("URL Immoweb invalide.")
-    q=parse_qs(u.query); q["orderBy"]=[ORDER_KEYS[0] if ORDER_KEYS else "newest"]; q.pop("page",None)
-    return urlunparse((u.scheme,u.netloc,u.path,u.params, urlencode({k:v[0] for k,v in q.items()}), u.fragment))
+def canonicalize_immoweb_url(u_in):
+    u = urlparse(u_in)
+    q = parse_qs(u.query); q["orderBy"] = ["newest"]; q.pop("page", None)
+    return urlunparse((u.scheme, u.netloc, u.path, u.params, urlencode({k:v[0] for k,v in q.items()}), u.fragment))
 
-def canonicalize_marjorietome_url(u_in:str)->str:
-    u=urlparse(u_in); q=parse_qs(u.query); q.pop("paged",None)
-    return urlunparse((u.scheme,u.netloc,u.path,u.params, urlencode({k:v[0] for k,v in q.items()}), u.fragment))
+def canonicalize_marjorietome_url(u_in):
+    u = urlparse(u_in); q = parse_qs(u.query); q.pop("paged", None)
+    return urlunparse((u.scheme, u.netloc, u.path, u.params, urlencode({k:v[0] for k,v in q.items()}), u.fragment))
 
-def host_ok_for_site(site_id:str, user_url:str)->bool:
-    if site_id.lower() in BROWSER_SITES: return True
-    try: host=(urlparse(user_url).netloc or "").lower()
-    except Exception: return False
+def host_ok(site_id, url):
+    if site_id in BROWSER_SITES: return True
+    try: host = urlparse(url).netloc.lower()
+    except: return False
     for s in SITES:
-        if s.get("id")==site_id:
-            needle=(s.get("host_contains") or "").lower().strip()
-            return (needle in host) if needle else True
+        if s["id"] == site_id: return s.get("host_contains", "") in host
     return True
 
-# Journaling
-def make_event(action:str, alert:dict)->dict:
-    ev={"ts":utc_iso(),"action":action,"alert":{}}
-    for k in ("site","url","email","label","pages","filters","use_browser"):
-        if k in alert and alert[k] not in (None,""): ev["alert"][k]=alert[k]
-    return ev
-
-def append_event(action:str, alert:dict, commit_message:str):
-    ev=make_event(action,alert); line=json.dumps(ev, ensure_ascii=False)
-    if _gh_token():
-        try: return gh_append_line(line, commit_message)
-        except Exception as e: st.error(f"Écriture GitHub échouée: {e}"); return None
-    os.makedirs(os.path.dirname(ALERTS_PATH) or ".", exist_ok=True)
-    with open(ALERTS_PATH,"a",encoding="utf-8") as f: f.write(line+"\n")
-    return True
-
-def _reduce_events_to_state(lines:list[dict])->list[dict]:
-    state={}
-    for row in lines:
-        if not isinstance(row,dict): continue
-        # Retro-compatibilité
-        if "action" not in row or "alert" not in row:
-            a=row; site=(a.get("site") or "immoweb").strip().lower()
-            url=(a.get("url","") or "").strip()
-            if site=="immokh": url=IMMOKH_LIST
-            if site=="adhome": url=ADHOME_LIST
-            key=f"{site}|{url}"
-            rec={"site":site,"url":url,"email":(a.get("email","") or "").strip()}
-            if SHOW_LABELS: rec["label"]=(a.get("label","") or "").strip()
-            if a.get("pages") is not None: rec["pages"]=int(a["pages"])
-            if a.get("use_browser") is not None: rec["use_browser"]=bool(a["use_browser"])
-            if site in BROWSER_SITES and a.get("filters") is not None:
-                rec["filters"]=a["filters"]; key += "|"+json.dumps(a["filters"], sort_keys=True, ensure_ascii=False)
-            state[key]=rec
-            continue
-        # Nouveau format
-        action=(row.get("action") or "").strip().lower()
-        a=row.get("alert") or {}
-        site=(a.get("site") or "immoweb").strip().lower()
-        url=(a.get("url","") or "").strip()
-        if site=="immokh": url=IMMOKH_LIST
-        if site=="adhome": url=ADHOME_LIST
-        filters=a.get("filters"); fkey=json.dumps(filters, sort_keys=True, ensure_ascii=False) if filters else ""
-        if action in {"add","update"}:
-            key=f"{site}|{url}"
-            rec={"site":site,"url":url,"email":(a.get("email","") or "").strip()}
-            if SHOW_LABELS: rec["label"]=(a.get("label","") or "").strip()
-            if a.get("pages") is not None: rec["pages"]=int(a["pages"])
-            if a.get("use_browser") is not None: rec["use_browser"]=bool(a["use_browser"])
-            if filters is not None: rec["filters"]=filters; key += f"|{fkey}"
-            state[key]=rec
-        elif action=="delete":
-            key=f"{site}|{url}"
-            if fkey: key += f"|{fkey}"
-            state.pop(key, None)
-    return list(state.values())
+def append_event(action, alert, msg):
+    ev = {"ts": utc_iso(), "action": action, "alert": alert}
+    line = json.dumps(ev, ensure_ascii=False)
+    if _gh_headers(): 
+        try: gh_append_line(line, msg)
+        except Exception as e: st.error(f"GitHub Error: {e}")
+    else:
+        os.makedirs(os.path.dirname(ALERTS_PATH) or ".", exist_ok=True)
+        with open(ALERTS_PATH, "a", encoding="utf-8") as f: f.write(line + "\n")
 
 def load_alerts():
-    raw=[]
-    if _gh_token():
-        try:
-            content,_=gh_get_file()
-            if content:
-                for line in content.splitlines():
-                    t=line.strip()
-                    if not t: continue
-                    try: raw.append(json.loads(t))
-                    except json.JSONDecodeError: pass
-            return _reduce_events_to_state(raw)
-        except Exception as e: st.error(f"Lecture GitHub échouée: {e}"); return []
-    if not os.path.isfile(ALERTS_PATH): return []
-    with open(ALERTS_PATH,"r",encoding="utf-8") as f:
-        for line in f:
-            t=line.strip()
-            if not t: continue
-            try: raw.append(json.loads(t))
-            except json.JSONDecodeError: pass
-    return _reduce_events_to_state(raw)
-
-# ============== UI HELPERS ==============
-IMMOKH_TYPES = [
-    "maison","appartement","duplex","penthouse","terrain",
-    "villa","studio","immeuble","commerce","bureau","industriel","garage"
-]
-
-def filters_summary_html(filters:dict|None)->str:
-    """Génère des badges HTML pour les filtres - SAFE MODE"""
-    if not filters: return "<span class='text-muted'>Aucun filtre spécifique</span>"
-    parts=[]
-    if filters.get("property_types"): 
-        for t in filters["property_types"]: parts.append(f"<span class='filter-tag'>{t.capitalize()}</span>")
-    if filters.get("cities"): 
-        for c in filters["cities"]: parts.append(f"<span class='filter-tag'>📍 {c}</span>")
+    raw = []
+    content, _ = gh_get_file()
+    if content:
+        lines = content.splitlines()
+    elif os.path.isfile(ALERTS_PATH):
+        with open(ALERTS_PATH, "r", encoding="utf-8") as f: lines = f.readlines()
+    else: lines = []
     
-    # Protection Safe Int : .get() peut renvoyer None si le JSON est null
-    p_min = int(filters.get("price_min") or 0)
-    p_max = int(filters.get("price_max") or 0)
-    
-    if p_min > 0 or p_max > 0:
-        txt_price = f"{p_min}€ → {p_max if p_max > 0 else '∞'}"
-        parts.append(f"<span class='filter-tag'>💰 {txt_price}</span>")
+    for l in lines:
+        if l.strip():
+            try: raw.append(json.loads(l))
+            except: pass
+            
+    # Reduction d'état
+    state = {}
+    for row in raw:
+        if "action" not in row: continue # Skip old format for safety if strictly needed, or adapt
+        action = row.get("action")
+        a = row.get("alert", {})
+        site = a.get("site", "immoweb")
+        url = a.get("url", "")
+        if site == "immokh": url = IMMOKH_LIST
+        if site == "adhome": url = ADHOME_LIST
+        fkey = json.dumps(a.get("filters"), sort_keys=True) if a.get("filters") else ""
+        key = f"{site}|{url}|{fkey}"
         
-    a_min = int(filters.get("area_min") or 0)
-    if a_min > 0: parts.append(f"<span class='filter-tag'>📐 ≥{a_min} m²</span>")
-    
-    b_min = int(filters.get("bedrooms_min") or 0)
-    if b_min > 0: parts.append(f"<span class='filter-tag'>🛏️ ≥{b_min} ch.</span>")
-    
-    bath_min = int(filters.get("bathrooms_min") or 0)
-    if bath_min > 0: parts.append(f"<span class='filter-tag'>🚿 ≥{bath_min} sdb</span>")
-    
-    return "".join(parts) if parts else "<span class='text-muted'>—</span>"
+        if action in ("add", "update"): state[key] = a
+        elif action == "delete": state.pop(key, None)
+            
+    return list(state.values())
 
-def immokh_adhome_filters_ui(default:dict|None=None, key_prefix:str="default"):
-    """
-    UI optimisée pour les filtres.
-    Safe Int + Key Prefix uniques
-    """
+# UI Components
+IMMOKH_TYPES = ["maison","appartement","penthouse","terrain","villa","immeuble","commerce"]
+
+def filters_ui(default=None, key_prefix=""):
     d = default or {}
+    st.markdown("###### 🎯 Critères de recherche")
     
-    st.markdown("##### 🛠️ Configuration des critères")
+    types = st.multiselect("Type de bien", IMMOKH_TYPES, default=[t for t in d.get("property_types",[]) if t in IMMOKH_TYPES], key=f"{key_prefix}_types")
+    cities = st.text_input("Villes (ex: Namur, Jambes)", value=",".join(d.get("cities",[])), key=f"{key_prefix}_cities")
     
-    # Helper pour gérer les valeurs null dans le JSON existant
-    def safe_int(k, default=0):
-        val = d.get(k)
-        return int(val) if val is not None else default
-
-    # 1. Types de biens
-    default_types = d.get("property_types") or ["maison","appartement","penthouse","terrain"]
-    valid_defaults = [t for t in default_types if t in IMMOKH_TYPES]
+    c1, c2, c3 = st.columns(3)
+    with c1: p_min = st.number_input("Prix Min", value=int(d.get("price_min") or 0), step=5000, key=f"{key_prefix}_pmin")
+    with c2: p_max = st.number_input("Prix Max", value=int(d.get("price_max") or 0), step=5000, key=f"{key_prefix}_pmax")
+    with c3: b_min = st.number_input("Chambres Min", value=int(d.get("bedrooms_min") or 0), key=f"{key_prefix}_bmin")
     
-    selected_types = st.multiselect(
-        "Types de biens recherchés",
-        options=IMMOKH_TYPES,
-        default=valid_defaults,
-        format_func=lambda x: x.capitalize(),
-        key=f"{key_prefix}_types_multi"
-    )
-    
-    # 2. Localisation
-    cities_txt = st.text_input(
-        "Villes / Communes (séparées par virgule)", 
-        value=",".join(d.get("cities", [])),
-        placeholder="Ex: Tamines, Aiseau-Presles...",
-        help="Laissez vide pour toute la zone couverte par l'agence.",
-        key=f"{key_prefix}_cities"
-    )
-    
-    st.markdown("---")
-    
-    # 3. Critères numériques regroupés
-    c1, c2 = st.columns(2)
-    with c1:
-        price_min = st.number_input("Prix Min (€)", 0, step=5000, value=safe_int("price_min"), key=f"{key_prefix}_pmin")
-        area_min = st.number_input("Surface Min (m²)", 0, step=10, value=safe_int("area_min"), key=f"{key_prefix}_amin")
-        bedrooms_min = st.number_input("Chambres Min", 0, step=1, value=safe_int("bedrooms_min"), key=f"{key_prefix}_bmin")
-    with c2:
-        price_max = st.number_input("Prix Max (€)", 0, step=5000, value=safe_int("price_max"), help="0 = Pas de limite", key=f"{key_prefix}_pmax")
-        st.write("") # Spacer
-        bathrooms_min = st.number_input("Salles de bain Min", 0, step=1, value=safe_int("bathrooms_min"), key=f"{key_prefix}_bathmin")
-
     return {
-        "property_types": selected_types,
-        "cities": [c.strip() for c in (cities_txt or "").split(",") if c.strip()],
-        "price_min": int(price_min),
-        "price_max": int(price_max),
-        "bedrooms_min": int(bedrooms_min),
-        "bathrooms_min": int(bathrooms_min),
-        "area_min": int(area_min),
-        "include_sold": False # Fixe
+        "property_types": types,
+        "cities": [c.strip() for c in cities.split(",") if c.strip()],
+        "price_min": int(p_min), "price_max": int(p_max), "bedrooms_min": int(b_min),
+        "include_sold": False
     }
 
-# ============== MAIN APP ==============
+def filters_badges(f):
+    if not f: return ""
+    badges = []
+    for t in f.get("property_types", []): badges.append(f"🏠 {t.capitalize()}")
+    for c in f.get("cities", []): badges.append(f"📍 {c}")
+    if f.get("price_max"): badges.append(f"💰 Max {f['price_max']}€")
+    if f.get("bedrooms_min"): badges.append(f"🛏️ {f['bedrooms_min']}+ ch")
+    return " ".join([f"<span class='badge-filter'>{b}</span>" for b in badges])
+
+# ============== APP START ==============
+
 if "alerts" not in st.session_state:
     st.session_state.alerts = load_alerts()
 
-# HEADER
-c_title, c_stat = st.columns([3, 1])
-with c_title:
-    st.title("🔔 AlertMe")
-    st.caption("Tableau de bord de surveillance immobilière")
-with c_stat:
-    nb = len(st.session_state.alerts)
-    st.metric("Alertes Actives", f"{nb}", delta=f"{MAX_ALERTS - nb} slots restants", delta_color="normal")
+# --- 1. IDENTITÉ (Header) ---
+st.markdown('<div class="identity-box">', unsafe_allow_html=True)
+c_id_text, c_id_input = st.columns([1.5, 2])
+with c_id_text:
+    st.markdown("## 👋 Bonjour")
+    st.markdown("Entrez votre email pour gérer vos alertes.")
+with c_id_input:
+    user_email = st.text_input("", placeholder="exemple@gmail.com", label_visibility="collapsed")
+st.markdown('</div>', unsafe_allow_html=True)
 
-# SECTION: CRÉATION D'ALERTE
-with st.expander("➕ Créer une nouvelle alerte", expanded=(len(st.session_state.alerts) == 0)):
-    tab_iw, tab_mt, tab_khadh = st.tabs(["🏠 Immoweb", "🏷️ ImmoToma", "🚀 Immo-KH + AD-HOME"])
+is_email_valid = is_valid_email(user_email)
+user_alerts = [a for a in st.session_state.alerts if a.get("email") == user_email.strip()] if is_email_valid else []
 
-    # ---- Immoweb ----
-    with tab_iw:
-        with st.form("form_immoweb", clear_on_submit=True):
-            st.markdown("#### Nouvelle surveillance Immoweb")
-            st.markdown("<div class='info-box'>Rendez-vous sur Immoweb, faites votre recherche avec vos filtres, puis copiez l'URL ici.</div>", unsafe_allow_html=True)
-            
-            col_u, col_e = st.columns([2, 1])
-            with col_u:
-                url = st.text_input("URL de recherche", placeholder="https://www.immoweb.be/fr/recherche/...")
-            with col_e:
-                email = st.text_input("Email de notification", placeholder="vous@email.com")
-                
-            c3, c4 = st.columns(2)
-            with c3:
-                label = st.text_input("Libellé (Optionnel)", placeholder="Ex: Maisons Bruxelles")
-            with c4:
-                pages = st.number_input("Profondeur (Pages max)", 1, 200, DEFAULT_PAGES)
-            
-            if st.form_submit_button("✨ Activer cette alerte", use_container_width=True):
-                if not url.strip(): st.error("L'URL est obligatoire.")
-                elif not email.strip() or not is_valid_email(email): st.error("Email invalide.")
-                elif not host_ok_for_site("immoweb", url): st.error("L'URL ne correspond pas à Immoweb.")
-                else:
-                    try:
-                        canon = canonicalize_immoweb_url(url.strip())
-                        rec = {"site":"immoweb","url":canon,"email":email.strip(),"pages":int(pages), "label":label.strip()}
-                        # Logic update/add
-                        key=f"immoweb|{canon}"
-                        idx=next((i for i,a in enumerate(st.session_state.alerts) if f"{a.get('site')}|{a.get('url')}"==key), None)
-                        if idx is not None:
-                            st.session_state.alerts[idx]=rec
-                            append_event("update", rec, "Update Immoweb")
-                            st.toast("Alerte Immoweb mise à jour !", icon="🔄")
-                        else:
-                            st.session_state.alerts.append(rec)
-                            append_event("add", rec, "Add Immoweb")
-                            st.toast("Alerte Immoweb créée !", icon="✅")
-                    except Exception as e: st.error(f"Erreur: {e}")
+# --- 2. CRÉATION (Always Visible) ---
+st.markdown('<div class="create-section">', unsafe_allow_html=True)
+st.markdown(f'<div class="create-title">✨ Créer une nouvelle alerte {f"pour {user_email}" if is_email_valid else ""}</div>', unsafe_allow_html=True)
 
-    # ---- ImmoToma ----
-    with tab_mt:
-        with st.form("form_marjorietome", clear_on_submit=True):
-            st.markdown("#### Nouvelle surveillance ImmoToma")
-            st.markdown("<div class='info-box'>Copiez l'URL de recherche depuis le site ImmoToma.</div>", unsafe_allow_html=True)
-            
-            col_u, col_e = st.columns([2, 1])
-            with col_u:
-                url = st.text_input("URL de recherche", placeholder="https://immotoma.be/advanced-search/...")
-            with col_e:
-                email = st.text_input("Email", placeholder="vous@email.com")
-            
-            c3, c4 = st.columns(2)
-            with c3:
-                label = st.text_input("Libellé", placeholder="Ex: Projets Toma")
-            with c4:
-                pages = st.number_input("Profondeur", 1, 200, DEFAULT_PAGES)
-                
-            if st.form_submit_button("✨ Activer cette alerte", use_container_width=True):
-                if not url.strip(): st.error("L'URL est obligatoire.")
-                elif not email.strip() or not is_valid_email(email): st.error("Email invalide.")
-                elif not host_ok_for_site("marjorietome", url): st.error("L'URL ne correspond pas à ImmoToma.")
-                else:
-                    try:
-                        canon = canonicalize_marjorietome_url(url.strip())
-                        rec = {"site":"marjorietome","url":canon,"email":email.strip(),"pages":int(pages), "label":label.strip()}
-                        # Logic update/add similar to Immoweb
-                        key=f"marjorietome|{canon}"
-                        idx=next((i for i,a in enumerate(st.session_state.alerts) if f"{a.get('site')}|{a.get('url')}"==key), None)
-                        if idx is not None:
-                            st.session_state.alerts[idx]=rec
-                            append_event("update", rec, "Update ImmoToma")
-                            st.toast("Alerte ImmoToma mise à jour !", icon="🔄")
-                        else:
-                            st.session_state.alerts.append(rec)
-                            append_event("add", rec, "Add ImmoToma")
-                            st.toast("Alerte ImmoToma créée !", icon="✅")
-                    except Exception as e: st.error(f"Erreur: {e}")
+tab_iw, tab_mt, tab_ka = st.tabs(["Immoweb", "ImmoToma", "Immo-KH & AD-HOME"])
 
-    # ---- KH + AD-HOME ----
-    with tab_khadh:
-        with st.form("form_kh_adhome", clear_on_submit=True):
-            st.markdown("#### Mode Multi-Agence (Immo-KH & AD-HOME)")
-            st.info("💡 Ce formulaire crée automatiquement **deux alertes distinctes** (une pour chaque agence) avec les mêmes critères. Le navigateur interne sera utilisé pour récupérer les données dynamiques.")
-            
-            ce1, ce2, ce3 = st.columns([2, 1, 1])
-            with ce1: email = st.text_input("Email de notification", placeholder="vous@email.com")
-            with ce2: label = st.text_input("Libellé global", placeholder="Ex: Biens Namur")
-            with ce3: pages = st.number_input("Profondeur (Clics)", 1, 200, DEFAULT_PAGES)
-            
-            filters_payload = immokh_adhome_filters_ui(
-                default={"price_min":0,"bedrooms_min":0,"bathrooms_min":0,"area_min":0,"include_sold":False},
-                key_prefix="new_khadh"
-            )
-            
-            st.write("")
-            if st.form_submit_button("✨ Créer les 2 alertes synchronisées", use_container_width=True):
-                if not email.strip() or not is_valid_email(email):
-                    st.error("Email invalide.")
-                else:
-                    try:
-                        # Logic logic logic... loop for both sites
-                        targets = [("immokh", IMMOKH_LIST), ("adhome", ADHOME_LIST)]
-                        for s_id, s_url in targets:
-                            rec = {
-                                "site": s_id, "url": s_url, "email": email.strip(),
-                                "pages": int(pages), "use_browser": True, "filters": filters_payload,
-                                "label": label.strip()
-                            }
-                            fkey=json.dumps(filters_payload, sort_keys=True, ensure_ascii=False)
-                            key=f"{s_id}|{s_url}|{fkey}"
-                            # Check existence
-                            idx=next((i for i,a in enumerate(st.session_state.alerts)
-                                      if (f"{a.get('site')}|{a.get('url')}|"+json.dumps(a.get('filters') or {}, sort_keys=True, ensure_ascii=False))==key), None)
-                            
-                            msg_action = "Update" if idx is not None else "Add"
-                            if idx is not None: st.session_state.alerts[idx] = rec
-                            else: st.session_state.alerts.append(rec)
-                            append_event(msg_action.lower(), rec, f"{msg_action} {s_id}")
-                        
-                        st.toast("Configuration appliquée aux deux agences avec succès !", icon="🚀")
-                    except Exception as e: st.error(f"Erreur: {e}")
-
-# SECTION: LISTE DES ALERTES
-st.markdown("### 📡 Vos surveillances actives")
-st.markdown("---")
-
-if not st.session_state.alerts:
-    st.info("Aucune alerte configurée pour le moment. Utilisez le panneau ci-dessus pour commencer.")
-
-alerts = st.session_state.alerts
-
-# AFFICHAGE DES CARTES
-for i, a in enumerate(alerts):
-    site = a.get("site","immoweb")
-    url = a.get("url","")
-    email = a.get("email","")
-    label = a.get("label","")
-    filters = a.get("filters")
-    pages = a.get("pages")
-    
-    # Icônes et noms stylisés
-    site_map = {
-        "immoweb": ("🏠", "Immoweb"),
-        "marjorietome": ("🏷️", "ImmoToma"),
-        "immokh": ("🏡", "Immo-KH"),
-        "adhome": ("🔑", "AD-HOME")
-    }
-    icon, site_nice = site_map.get(site, ("🌐", site))
-    
-    # Début de la carte visuelle
-    with st.container():
-        st.markdown('<div class="alert-card">', unsafe_allow_html=True)
-
-        # 1. EN-TÊTE DE LA CARTE (Info à gauche, Poubelle à droite)
-        c_header, c_delete = st.columns([6, 1])
+# > Immoweb
+with tab_iw:
+    with st.form("new_iw", clear_on_submit=True):
+        u = st.text_input("URL de recherche Immoweb", placeholder="https://www.immoweb.be/fr/recherche/...")
+        l = st.text_input("Nom de l'alerte (ex: Maison Bruxelles)", placeholder="Optionnel")
+        submitted = st.form_submit_button("Ajouter l'alerte", use_container_width=True)
         
-        with c_header:
-            header_html = f"""
-            <div class="alert-site">
-                <span>{icon} {site_nice}</span>
-                {f'<span class="alert-label">{label}</span>' if label else ''}
-            </div>
-            <div class="alert-details" style="margin-top:4px;">
-                📧 <strong>{email}</strong> &nbsp;•&nbsp; Max {pages} pages
-            </div>
-            """
-            st.markdown(header_html, unsafe_allow_html=True)
+        if submitted:
+            if not is_email_valid: st.error("Veuillez entrer un email valide en haut de page.")
+            elif not host_ok("immoweb", u): st.warning("L'URL ne semble pas venir d'Immoweb.")
+            else:
+                try:
+                    clean_url = canonicalize_immoweb_url(u)
+                    rec = {"site":"immoweb","url":clean_url,"email":user_email.strip(),"label":l.strip(),"pages":20}
+                    st.session_state.alerts.append(rec) # Optimistic UI
+                    append_event("add", rec, "Add IW")
+                    st.toast("Alerte Immoweb ajoutée !", icon="✅")
+                    st.rerun()
+                except Exception as e: st.error(f"Erreur URL: {e}")
+
+# > Toma
+with tab_mt:
+    with st.form("new_mt", clear_on_submit=True):
+        u = st.text_input("URL de recherche ImmoToma", placeholder="https://immotoma.be/advanced-search/...")
+        l = st.text_input("Nom de l'alerte", placeholder="Optionnel")
+        submitted = st.form_submit_button("Ajouter l'alerte", use_container_width=True)
         
-        with c_delete:
-            st.write("") # Spacer
-            if st.button("🗑️", key=f"del_btn_{i}", help="Supprimer cette alerte"):
-                payload={"site":site,"url":url}
-                if site in BROWSER_SITES and filters: payload["filters"]=filters
-                append_event("delete", payload, "Delete alert UI")
-                st.session_state.alerts.pop(i)
+        if submitted:
+            if not is_email_valid: st.error("Veuillez entrer un email valide en haut de page.")
+            elif not host_ok("marjorietome", u): st.warning("L'URL ne semble pas venir d'ImmoToma.")
+            else:
+                try:
+                    clean_url = canonicalize_marjorietome_url(u)
+                    rec = {"site":"marjorietome","url":clean_url,"email":user_email.strip(),"label":l.strip(),"pages":20}
+                    st.session_state.alerts.append(rec)
+                    append_event("add", rec, "Add MT")
+                    st.toast("Alerte ImmoToma ajoutée !", icon="✅")
+                    st.rerun()
+                except: st.error("URL invalide")
+
+# > KH/AD
+with tab_ka:
+    with st.form("new_ka", clear_on_submit=True):
+        st.info("Crée deux alertes simultanées (Immo-KH et AD-HOME).")
+        l = st.text_input("Nom global", placeholder="Ex: Terrains Namur")
+        f_data = filters_ui(key_prefix="new_ka")
+        submitted = st.form_submit_button("Ajouter les 2 alertes", use_container_width=True)
+        
+        if submitted:
+            if not is_email_valid: st.error("Veuillez entrer un email valide en haut de page.")
+            else:
+                for s_id, s_url in [("immokh", IMMOKH_LIST), ("adhome", ADHOME_LIST)]:
+                    rec = {"site":s_id,"url":s_url,"email":user_email.strip(),"label":l.strip(),"filters":f_data,"use_browser":True,"pages":20}
+                    st.session_state.alerts.append(rec)
+                    append_event("add", rec, f"Add {s_id}")
+                st.toast("Alertes créées avec succès !", icon="🚀")
                 st.rerun()
 
-        # 2. DÉTAILS TECHNIQUES (URL ou Filtres)
-        if site in BROWSER_SITES:
-            html_filters = filters_summary_html(filters)
-            st.markdown(f"<div style='margin-top:8px; padding-top:8px; border-top:1px solid #f1f5f9;'>{html_filters}</div>", unsafe_allow_html=True)
-        else:
-            short_url = (url[:65] + '...') if len(url) > 65 else url
-            st.markdown(f"<div style='font-family:monospace; font-size:0.8rem; color:#64748b; word-break:break-all; margin-top:8px; padding-top:8px; border-top:1px solid #f1f5f9;' title='{url}'>{short_url}</div>", unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
-        st.markdown('</div>', unsafe_allow_html=True) # Fin du style de la carte
+# --- 3. LISTE FILTRÉE ---
+st.subheader(f"📋 Mes Alertes Actives ({len(user_alerts)})")
+
+if not is_email_valid:
+    st.info("👆 Entrez votre email ci-dessus pour voir vos alertes.")
+elif not user_alerts:
+    st.markdown(f"""
+    <div class="empty-state">
+        <h3>Aucune alerte trouvée pour {user_email}</h3>
+        <p>Utilisez le formulaire ci-dessus pour créer votre première surveillance.</p>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    for i, alert in enumerate(user_alerts):
+        # Recherche de l'index réel dans la liste globale pour suppression correcte
+        real_index = next((idx for idx, a in enumerate(st.session_state.alerts) 
+                          if a == alert), None)
         
-        # 3. MODIFICATION (Expander en dessous)
-        with st.expander(f"⚙️ Modifier / Détails"):
-            with st.form(f"edit_form_{i}"):
-                st.caption("Certains paramètres (comme le site) ne sont pas modifiables.")
-                new_email = st.text_input("Email", value=email)
-                new_pages = st.number_input("Pages", 1, 200, int(pages or DEFAULT_PAGES))
-                new_label = st.text_input("Libellé", value=label)
-                
-                new_filters = None
-                new_url = url
-                
+        if real_index is None: continue
+
+        site = alert.get("site")
+        label = alert.get("label") or "Sans titre"
+        url = alert.get("url")
+        filters = alert.get("filters")
+        
+        # Render Card
+        with st.container():
+            st.markdown('<div class="alert-card">', unsafe_allow_html=True)
+            c1, c2 = st.columns([5, 1])
+            
+            with c1:
+                st.markdown(f"**{label}** <span class='badge-site'>{site}</span>", unsafe_allow_html=True)
                 if site in BROWSER_SITES:
-                    st.markdown("**Filtres actifs :**")
-                    new_filters = immokh_adhome_filters_ui(default=filters, key_prefix=f"edit_{i}")
+                    st.markdown(filters_badges(filters), unsafe_allow_html=True)
                 else:
-                    new_url = st.text_input("URL", value=url)
-                
-                if st.form_submit_button("💾 Enregistrer les modifications"):
-                    try:
-                        if not is_valid_email(new_email): st.warning("Email invalide.")
-                        elif site not in BROWSER_SITES and not host_ok_for_site(site, new_url): st.warning("URL invalide.")
-                        else:
-                            edited = dict(a)
-                            edited.update({"email": new_email, "pages": int(new_pages), "label": new_label})
-                            
-                            if site in BROWSER_SITES:
-                                edited["filters"] = new_filters
-                            else:
-                                edited["url"] = canonicalize_immoweb_url(new_url) if site=="immoweb" else canonicalize_marjorietome_url(new_url)
-                            
-                            st.session_state.alerts[i] = edited
-                            append_event("update", edited, "Inline Edit UI")
-                            st.toast("Modification enregistrée !", icon="💾")
-                            st.rerun()
-                    except Exception as e: st.error(f"Erreur: {e}")
+                    st.caption(f"🔗 {url[:60]}...")
+            
+            with c2:
+                if st.button("🗑️", key=f"del_{i}_{real_index}"):
+                    st.session_state.alerts.pop(real_index)
+                    # Reconstruction pour delete event
+                    payload = {"site":site,"url":url}
+                    if filters: payload["filters"] = filters
+                    append_event("delete", payload, "User delete")
+                    st.rerun()
+                    
+            st.markdown("</div>", unsafe_allow_html=True)
