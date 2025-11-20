@@ -299,23 +299,26 @@ def filters_summary_html(filters:dict|None)->str:
     
     return "".join(parts) if parts else "<span class='text-muted'>—</span>"
 
-def immokh_adhome_filters_ui(default:dict|None=None):
-    """UI optimisée pour les filtres"""
+def immokh_adhome_filters_ui(default:dict|None=None, key_prefix:str="default"):
+    """
+    UI optimisée pour les filtres.
+    CORRECTION BUG: Utilisation de key_prefix pour éviter les ID dupliqués.
+    """
     d = default or {}
     
     st.markdown("##### 🛠️ Configuration des critères")
     
     # 1. Types de biens (Multiselect au lieu de cases à cocher)
     default_types = d.get("property_types") or ["maison","appartement","penthouse","terrain"]
-    # Nettoyage si des types inconnus sont dans la config
     valid_defaults = [t for t in default_types if t in IMMOKH_TYPES]
     
+    # CORRECTION: Clé dynamique
     selected_types = st.multiselect(
         "Types de biens recherchés",
         options=IMMOKH_TYPES,
         default=valid_defaults,
         format_func=lambda x: x.capitalize(),
-        key="khadh_types_multi"
+        key=f"{key_prefix}_types_multi"
     )
     
     # 2. Localisation
@@ -323,7 +326,8 @@ def immokh_adhome_filters_ui(default:dict|None=None):
         "Villes / Communes (séparées par virgule)", 
         value=",".join(d.get("cities", [])),
         placeholder="Ex: Tamines, Aiseau-Presles...",
-        help="Laissez vide pour toute la zone couverte par l'agence."
+        help="Laissez vide pour toute la zone couverte par l'agence.",
+        key=f"{key_prefix}_cities"
     )
     
     st.markdown("---")
@@ -331,14 +335,14 @@ def immokh_adhome_filters_ui(default:dict|None=None):
     # 3. Critères numériques regroupés
     c1, c2 = st.columns(2)
     with c1:
-        price_min = st.number_input("Prix Min (€)", 0, step=5000, value=int(d.get("price_min",0)))
-        area_min = st.number_input("Surface Min (m²)", 0, step=10, value=int(d.get("area_min",0)))
-        bedrooms_min = st.number_input("Chambres Min", 0, step=1, value=int(d.get("bedrooms_min",0)))
+        # CORRECTION: Clés dynamiques partout
+        price_min = st.number_input("Prix Min (€)", 0, step=5000, value=int(d.get("price_min",0)), key=f"{key_prefix}_pmin")
+        area_min = st.number_input("Surface Min (m²)", 0, step=10, value=int(d.get("area_min",0)), key=f"{key_prefix}_amin")
+        bedrooms_min = st.number_input("Chambres Min", 0, step=1, value=int(d.get("bedrooms_min",0)), key=f"{key_prefix}_bmin")
     with c2:
-        price_max = st.number_input("Prix Max (€)", 0, step=5000, value=int(d.get("price_max",0)), help="0 = Pas de limite")
-        # Placeholder pour alignement ou autre
+        price_max = st.number_input("Prix Max (€)", 0, step=5000, value=int(d.get("price_max",0)), help="0 = Pas de limite", key=f"{key_prefix}_pmax")
         st.write("") # Spacer
-        bathrooms_min = st.number_input("Salles de bain Min", 0, step=1, value=int(d.get("bathrooms_min",0)))
+        bathrooms_min = st.number_input("Salles de bain Min", 0, step=1, value=int(d.get("bathrooms_min",0)), key=f"{key_prefix}_bathmin")
 
     return {
         "property_types": selected_types,
@@ -457,7 +461,11 @@ with st.expander("➕ Créer une nouvelle alerte", expanded=(len(st.session_stat
             with ce2: label = st.text_input("Libellé global", placeholder="Ex: Biens Namur")
             with ce3: pages = st.number_input("Profondeur (Clics)", 1, 200, DEFAULT_PAGES)
             
-            filters_payload = immokh_adhome_filters_ui(default={"price_min":0,"bedrooms_min":0,"bathrooms_min":0,"area_min":0,"include_sold":False})
+            # CORRECTION: Ajout d'un préfixe unique "new"
+            filters_payload = immokh_adhome_filters_ui(
+                default={"price_min":0,"bedrooms_min":0,"bathrooms_min":0,"area_min":0,"include_sold":False},
+                key_prefix="new_khadh"
+            )
             
             st.write("")
             if st.form_submit_button("✨ Créer les 2 alertes synchronisées", use_container_width=True):
@@ -515,17 +523,13 @@ for i, a in enumerate(alerts):
     icon, site_nice = site_map.get(site, ("🌐", site))
     
     # Début de la carte visuelle
-    # On utilise un conteneur natif avec bordure (plus propre que le hack CSS)
-    # ou on garde le style CSS personnalisé mais sans le hack de positionnement.
     with st.container():
-        # On ouvre la div CSS pour le style (ombre, fond blanc)
         st.markdown('<div class="alert-card">', unsafe_allow_html=True)
 
         # 1. EN-TÊTE DE LA CARTE (Info à gauche, Poubelle à droite)
         c_header, c_delete = st.columns([6, 1])
         
         with c_header:
-            # HTML pour le titre et les infos principales
             header_html = f"""
             <div class="alert-site">
                 <span>{icon} {site_nice}</span>
@@ -538,8 +542,8 @@ for i, a in enumerate(alerts):
             st.markdown(header_html, unsafe_allow_html=True)
         
         with c_delete:
-            # Le bouton supprimer est maintenant dans sa propre colonne (plus de hack CSS)
-            st.write("") # Petit spacer vertical pour aligner
+            st.write("") # Spacer
+            # CORRECTION: Clé unique garantie
             if st.button("🗑️", key=f"del_btn_{i}", help="Supprimer cette alerte"):
                 payload={"site":site,"url":url}
                 if site in BROWSER_SITES and filters: payload["filters"]=filters
@@ -570,7 +574,8 @@ for i, a in enumerate(alerts):
                 
                 if site in BROWSER_SITES:
                     st.markdown("**Filtres actifs :**")
-                    new_filters = immokh_adhome_filters_ui(default=filters)
+                    # CORRECTION: On passe un préfixe unique lié à la carte 'i'
+                    new_filters = immokh_adhome_filters_ui(default=filters, key_prefix=f"edit_{i}")
                 else:
                     new_url = st.text_input("URL", value=url)
                 
@@ -592,16 +597,3 @@ for i, a in enumerate(alerts):
                             st.toast("Modification enregistrée !", icon="💾")
                             st.rerun()
                     except Exception as e: st.error(f"Erreur: {e}")
-
-        # DELETE BUTTON (Extérieur à l'expander pour accès rapide)
-        # On utilise un petit hack visuel pour placer le bouton supprimer proprement
-        st.markdown("<div style='margin-top:-45px; float:right; position:relative; z-index:2;'>", unsafe_allow_html=True)
-        if st.button("🗑️", key=f"del_btn_{i}", help="Supprimer cette alerte"):
-            payload={"site":site,"url":url}
-            if site in BROWSER_SITES and filters: payload["filters"]=filters
-            append_event("delete", payload, "Delete alert UI")
-            st.session_state.alerts.pop(i)
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        st.markdown("</div>", unsafe_allow_html=True) # Fin carte wrapper
