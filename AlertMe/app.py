@@ -86,7 +86,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ============== LOGIQUE METIER (INCHANGÉE) ==============
+# ============== LOGIQUE METIER ==============
 CONFIG_PATH = os.path.join(".", "config.json")
 DEFAULT_CONFIG = {
     "alerts_path": "./AlertMe/alerts.jsonl",
@@ -279,7 +279,7 @@ IMMOKH_TYPES = [
 ]
 
 def filters_summary_html(filters:dict|None)->str:
-    """Génère des badges HTML pour les filtres"""
+    """Génère des badges HTML pour les filtres - SAFE MODE"""
     if not filters: return "<span class='text-muted'>Aucun filtre spécifique</span>"
     parts=[]
     if filters.get("property_types"): 
@@ -287,32 +287,43 @@ def filters_summary_html(filters:dict|None)->str:
     if filters.get("cities"): 
         for c in filters["cities"]: parts.append(f"<span class='filter-tag'>📍 {c}</span>")
     
-    p_min = filters.get("price_min", 0)
-    p_max = filters.get("price_max", 0)
+    # Protection Safe Int : .get() peut renvoyer None si le JSON est null
+    p_min = int(filters.get("price_min") or 0)
+    p_max = int(filters.get("price_max") or 0)
+    
     if p_min > 0 or p_max > 0:
         txt_price = f"{p_min}€ → {p_max if p_max > 0 else '∞'}"
         parts.append(f"<span class='filter-tag'>💰 {txt_price}</span>")
         
-    if filters.get("area_min"): parts.append(f"<span class='filter-tag'>📐 ≥{filters['area_min']} m²</span>")
-    if filters.get("bedrooms_min"): parts.append(f"<span class='filter-tag'>🛏️ ≥{filters['bedrooms_min']} ch.</span>")
-    if filters.get("bathrooms_min"): parts.append(f"<span class='filter-tag'>🚿 ≥{filters['bathrooms_min']} sdb</span>")
+    a_min = int(filters.get("area_min") or 0)
+    if a_min > 0: parts.append(f"<span class='filter-tag'>📐 ≥{a_min} m²</span>")
+    
+    b_min = int(filters.get("bedrooms_min") or 0)
+    if b_min > 0: parts.append(f"<span class='filter-tag'>🛏️ ≥{b_min} ch.</span>")
+    
+    bath_min = int(filters.get("bathrooms_min") or 0)
+    if bath_min > 0: parts.append(f"<span class='filter-tag'>🚿 ≥{bath_min} sdb</span>")
     
     return "".join(parts) if parts else "<span class='text-muted'>—</span>"
 
 def immokh_adhome_filters_ui(default:dict|None=None, key_prefix:str="default"):
     """
     UI optimisée pour les filtres.
-    CORRECTION BUG: Utilisation de key_prefix pour éviter les ID dupliqués.
+    Safe Int + Key Prefix uniques
     """
     d = default or {}
     
     st.markdown("##### 🛠️ Configuration des critères")
     
-    # 1. Types de biens (Multiselect au lieu de cases à cocher)
+    # Helper pour gérer les valeurs null dans le JSON existant
+    def safe_int(k, default=0):
+        val = d.get(k)
+        return int(val) if val is not None else default
+
+    # 1. Types de biens
     default_types = d.get("property_types") or ["maison","appartement","penthouse","terrain"]
     valid_defaults = [t for t in default_types if t in IMMOKH_TYPES]
     
-    # CORRECTION: Clé dynamique
     selected_types = st.multiselect(
         "Types de biens recherchés",
         options=IMMOKH_TYPES,
@@ -335,14 +346,13 @@ def immokh_adhome_filters_ui(default:dict|None=None, key_prefix:str="default"):
     # 3. Critères numériques regroupés
     c1, c2 = st.columns(2)
     with c1:
-        # CORRECTION: Clés dynamiques partout
-        price_min = st.number_input("Prix Min (€)", 0, step=5000, value=int(d.get("price_min",0)), key=f"{key_prefix}_pmin")
-        area_min = st.number_input("Surface Min (m²)", 0, step=10, value=int(d.get("area_min",0)), key=f"{key_prefix}_amin")
-        bedrooms_min = st.number_input("Chambres Min", 0, step=1, value=int(d.get("bedrooms_min",0)), key=f"{key_prefix}_bmin")
+        price_min = st.number_input("Prix Min (€)", 0, step=5000, value=safe_int("price_min"), key=f"{key_prefix}_pmin")
+        area_min = st.number_input("Surface Min (m²)", 0, step=10, value=safe_int("area_min"), key=f"{key_prefix}_amin")
+        bedrooms_min = st.number_input("Chambres Min", 0, step=1, value=safe_int("bedrooms_min"), key=f"{key_prefix}_bmin")
     with c2:
-        price_max = st.number_input("Prix Max (€)", 0, step=5000, value=int(d.get("price_max",0)), help="0 = Pas de limite", key=f"{key_prefix}_pmax")
+        price_max = st.number_input("Prix Max (€)", 0, step=5000, value=safe_int("price_max"), help="0 = Pas de limite", key=f"{key_prefix}_pmax")
         st.write("") # Spacer
-        bathrooms_min = st.number_input("Salles de bain Min", 0, step=1, value=int(d.get("bathrooms_min",0)), key=f"{key_prefix}_bathmin")
+        bathrooms_min = st.number_input("Salles de bain Min", 0, step=1, value=safe_int("bathrooms_min"), key=f"{key_prefix}_bathmin")
 
     return {
         "property_types": selected_types,
@@ -461,7 +471,6 @@ with st.expander("➕ Créer une nouvelle alerte", expanded=(len(st.session_stat
             with ce2: label = st.text_input("Libellé global", placeholder="Ex: Biens Namur")
             with ce3: pages = st.number_input("Profondeur (Clics)", 1, 200, DEFAULT_PAGES)
             
-            # CORRECTION: Ajout d'un préfixe unique "new"
             filters_payload = immokh_adhome_filters_ui(
                 default={"price_min":0,"bedrooms_min":0,"bathrooms_min":0,"area_min":0,"include_sold":False},
                 key_prefix="new_khadh"
@@ -543,7 +552,6 @@ for i, a in enumerate(alerts):
         
         with c_delete:
             st.write("") # Spacer
-            # CORRECTION: Clé unique garantie
             if st.button("🗑️", key=f"del_btn_{i}", help="Supprimer cette alerte"):
                 payload={"site":site,"url":url}
                 if site in BROWSER_SITES and filters: payload["filters"]=filters
@@ -574,7 +582,6 @@ for i, a in enumerate(alerts):
                 
                 if site in BROWSER_SITES:
                     st.markdown("**Filtres actifs :**")
-                    # CORRECTION: On passe un préfixe unique lié à la carte 'i'
                     new_filters = immokh_adhome_filters_ui(default=filters, key_prefix=f"edit_{i}")
                 else:
                     new_url = st.text_input("URL", value=url)
