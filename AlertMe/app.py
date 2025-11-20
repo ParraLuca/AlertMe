@@ -514,37 +514,51 @@ for i, a in enumerate(alerts):
     }
     icon, site_nice = site_map.get(site, ("🌐", site))
     
-    # Container de la carte
+    # Début de la carte visuelle
+    # On utilise un conteneur natif avec bordure (plus propre que le hack CSS)
+    # ou on garde le style CSS personnalisé mais sans le hack de positionnement.
     with st.container():
-        st.markdown(f"""
-        <div class="alert-card">
-            <div class="alert-header">
-                <div class="alert-site">
-                    <span>{icon} {site_nice}</span>
-                    {f'<span class="alert-label">{label}</span>' if label else ''}
-                </div>
-                <div style="color:var(--text-gray); font-size:0.8rem;">Max {pages} pages</div>
-            </div>
-            <div class="alert-details">
-                <div style="margin-bottom:4px;">📧 <strong>{email}</strong></div>
-        """, unsafe_allow_html=True)
-        
-        if site in BROWSER_SITES:
-            # Affichage des badges de filtres
-            html_filters = filters_summary_html(filters)
-            st.markdown(f"<div style='margin-top:8px;'>{html_filters}</div>", unsafe_allow_html=True)
-        else:
-            # Affichage URL tronquée
-            short_url = (url[:60] + '...') if len(url) > 60 else url
-            st.markdown(f"<div style='font-family:monospace; font-size:0.8rem; color:#64748b; word-break:break-all;' title='{url}'>{short_url}</div>", unsafe_allow_html=True)
+        # On ouvre la div CSS pour le style (ombre, fond blanc)
+        st.markdown('<div class="alert-card">', unsafe_allow_html=True)
 
-        st.markdown("</div>", unsafe_allow_html=True) # Fin contenu HTML statique
+        # 1. EN-TÊTE DE LA CARTE (Info à gauche, Poubelle à droite)
+        c_header, c_delete = st.columns([6, 1])
         
-        # Actions (Edit/Delete)
-        c_edit, c_del = st.columns([1, 4]) # Colonnes étroites pour boutons
+        with c_header:
+            # HTML pour le titre et les infos principales
+            header_html = f"""
+            <div class="alert-site">
+                <span>{icon} {site_nice}</span>
+                {f'<span class="alert-label">{label}</span>' if label else ''}
+            </div>
+            <div class="alert-details" style="margin-top:4px;">
+                📧 <strong>{email}</strong> &nbsp;•&nbsp; Max {pages} pages
+            </div>
+            """
+            st.markdown(header_html, unsafe_allow_html=True)
         
-        # EDIT MODE (Expander intégré à la "carte" visuellement)
-        with st.expander("⚙️ Modifier / Détails"):
+        with c_delete:
+            # Le bouton supprimer est maintenant dans sa propre colonne (plus de hack CSS)
+            st.write("") # Petit spacer vertical pour aligner
+            if st.button("🗑️", key=f"del_btn_{i}", help="Supprimer cette alerte"):
+                payload={"site":site,"url":url}
+                if site in BROWSER_SITES and filters: payload["filters"]=filters
+                append_event("delete", payload, "Delete alert UI")
+                st.session_state.alerts.pop(i)
+                st.rerun()
+
+        # 2. DÉTAILS TECHNIQUES (URL ou Filtres)
+        if site in BROWSER_SITES:
+            html_filters = filters_summary_html(filters)
+            st.markdown(f"<div style='margin-top:8px; padding-top:8px; border-top:1px solid #f1f5f9;'>{html_filters}</div>", unsafe_allow_html=True)
+        else:
+            short_url = (url[:65] + '...') if len(url) > 65 else url
+            st.markdown(f"<div style='font-family:monospace; font-size:0.8rem; color:#64748b; word-break:break-all; margin-top:8px; padding-top:8px; border-top:1px solid #f1f5f9;' title='{url}'>{short_url}</div>", unsafe_allow_html=True)
+
+        st.markdown('</div>', unsafe_allow_html=True) # Fin du style de la carte
+        
+        # 3. MODIFICATION (Expander en dessous)
+        with st.expander(f"⚙️ Modifier / Détails"):
             with st.form(f"edit_form_{i}"):
                 st.caption("Certains paramètres (comme le site) ne sont pas modifiables.")
                 new_email = st.text_input("Email", value=email)
