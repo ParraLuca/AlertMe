@@ -6,107 +6,61 @@ import streamlit as st
 
 # ============== CONFIG & THEME ==============
 st.set_page_config(
-    page_title="AlertMe – Mon Tableau de Bord",
+    page_title="AlertMe",
     page_icon="🔔",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# CSS MODERNE & UI
+# CSS MODERNE "CLEAN UI"
 st.markdown("""
 <style>
-    /* Variables & Thème */
+    /* Variables globales */
     :root {
-        --primary: #6366f1;       /* Indigo 500 */
-        --primary-dark: #4338ca;  /* Indigo 700 */
-        --bg-soft: #f8fafc;       /* Slate 50 */
-        --text-main: #0f172a;     /* Slate 900 */
-        --text-muted: #64748b;    /* Slate 500 */
-        --card-bg: #ffffff;
-        --border: #e2e8f0;
+        --primary: #4f46e5;
+        --text-dark: #1e293b;
+        --text-gray: #64748b;
+        --bg-hover: #f8fafc;
     }
 
-    /* Global */
-    .block-container { padding-top: 2rem; max-width: 850px; }
+    /* Global cleanup */
+    .block-container { padding-top: 2.5rem; max-width: 800px; }
     
-    /* Header "Identity" Section */
-    .identity-box {
-        background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-        padding: 1.5rem;
-        border-radius: 12px;
-        color: white;
-        margin-bottom: 2rem;
-        box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.2);
-    }
-    .identity-box h2 { color: white !important; margin: 0 0 0.5rem 0; font-size: 1.5rem; }
-    .identity-box p { color: #e0e7ff; margin: 0; font-size: 0.9rem; }
+    /* Section Header (Identité) */
+    .header-title { font-size: 1.8rem; font-weight: 800; color: var(--text-dark); margin-bottom: 0.2rem; }
+    .header-subtitle { font-size: 1rem; color: var(--text-gray); margin-bottom: 1.5rem; }
+    
+    /* Style des Inputs pour qu'ils soient moins "bloques" */
     .stTextInput input {
-        border: 2px solid var(--border);
-        border-radius: 8px;
-        padding: 0.5rem 1rem;
+        background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px;
     }
     .stTextInput input:focus {
-        border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
     }
 
-    /* Section Création (Always Visible) */
-    .create-section {
-        background: var(--card-bg);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 20px;
-        margin-bottom: 2rem;
+    /* Badges élégants */
+    .badge-site {
+        display: inline-block; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+        padding: 3px 8px; border-radius: 6px; background: #eff6ff; color: #2563eb; margin-left: 8px; vertical-align: middle;
     }
-    .create-title {
-        font-weight: 700;
-        color: var(--text-main);
-        margin-bottom: 1rem;
-        display: flex;
-        align-items: center;
-        gap: 8px;
+    .filter-pill {
+        display: inline-block; font-size: 0.75rem; color: #475569; background: #f1f5f9;
+        padding: 2px 8px; border-radius: 99px; margin-right: 4px; margin-top: 4px; border: 1px solid #e2e8f0;
     }
 
-    /* Tabs Custom */
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; border-bottom: 1px solid var(--border); }
-    .stTabs [data-baseweb="tab"] {
-        background: transparent; border: none; font-weight: 500; color: var(--text-muted);
-    }
-    .stTabs [aria-selected="true"] {
-        color: var(--primary); border-bottom: 2px solid var(--primary);
-    }
+    /* Typographie des cartes (sans bordures) */
+    .card-title { font-size: 1.1rem; font-weight: 600; color: var(--text-dark); display: flex; align-items: center; }
+    .card-meta { font-size: 0.85rem; color: var(--text-gray); margin-top: 4px; }
+    .card-link { font-family: monospace; color: var(--text-gray); font-size: 0.8rem; margin-top: 6px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-    /* Cartes Alertes */
-    .alert-card {
-        background: var(--card-bg);
-        border: 1px solid var(--border);
-        border-left: 4px solid var(--primary);
-        border-radius: 8px;
-        padding: 16px;
-        margin-bottom: 12px;
-        transition: transform 0.2s;
-    }
-    .alert-card:hover { border-color: var(--primary-dark); transform: translateY(-1px); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
-    
-    /* Badges */
-    .badge-site { 
-        font-size: 0.75rem; font-weight: 700; text-transform: uppercase; 
-        padding: 2px 8px; border-radius: 4px; background: #e0e7ff; color: var(--primary-dark);
-    }
-    .badge-filter {
-        display: inline-flex; align-items: center; background: #f1f5f9; color: #475569; 
-        padding: 2px 8px; border-radius: 99px; font-size: 0.75rem; margin: 2px; border: 1px solid #e2e8f0;
-    }
-    
-    /* Empty State */
-    .empty-state {
-        text-align: center; padding: 3rem 1rem; color: var(--text-muted);
-        background: var(--bg-soft); border-radius: 12px; border: 2px dashed var(--border);
-    }
+    /* Onglets plus discrets */
+    .stTabs [data-baseweb="tab-list"] { border-bottom: 1px solid #e2e8f0; gap: 16px; }
+    .stTabs [data-baseweb="tab"] { font-weight: 500; color: var(--text-gray); border: none; background: transparent; }
+    .stTabs [aria-selected="true"] { color: var(--primary); border-bottom: 2px solid var(--primary); }
 </style>
 """, unsafe_allow_html=True)
 
-# ============== CONFIG & UTILS ==============
+# ============== LOGIQUE MÉTIER (Identique) ==============
 CONFIG_PATH = os.path.join(".", "config.json")
 DEFAULT_CONFIG = {
     "alerts_path": "./AlertMe/alerts.jsonl",
@@ -121,7 +75,6 @@ DEFAULT_CONFIG = {
     "scraper_defaults": { "pages": 20, "order_keys": ["newest"] }
 }
 
-# Chargement Config
 def _load_cfg():
     if not os.path.isfile(CONFIG_PATH): return DEFAULT_CONFIG
     try:
@@ -137,7 +90,6 @@ IMMOWEB_HOST = "www.immoweb.be"
 IMMOKH_LIST = "https://www.immo-kh.be/fr/2/chercher-bien/a-vendre"
 ADHOME_LIST = "https://www.ad-home.be/fr/2/chercher-bien/a-vendre"
 
-# Github
 def _sec(k):
     try: return st.secrets.get(k)
     except: return os.getenv(k)
@@ -174,7 +126,6 @@ def gh_append_line(line, msg):
     requests.put(f"https://api.github.com/repos/{repo}/contents/{path}", headers=headers, json=payload).raise_for_status()
     return True
 
-# Helpers Métier
 def is_valid_email(s): return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", str(s).strip()))
 def utc_iso(): return datetime.now(timezone.utc).isoformat()
 
@@ -219,10 +170,9 @@ def load_alerts():
             try: raw.append(json.loads(l))
             except: pass
             
-    # Reduction d'état
     state = {}
     for row in raw:
-        if "action" not in row: continue # Skip old format for safety if strictly needed, or adapt
+        if "action" not in row: continue
         action = row.get("action")
         a = row.get("alert", {})
         site = a.get("site", "immoweb")
@@ -242,9 +192,8 @@ IMMOKH_TYPES = ["maison","appartement","penthouse","terrain","villa","immeuble",
 
 def filters_ui(default=None, key_prefix=""):
     d = default or {}
-    st.markdown("###### 🎯 Critères de recherche")
-    
-    types = st.multiselect("Type de bien", IMMOKH_TYPES, default=[t for t in d.get("property_types",[]) if t in IMMOKH_TYPES], key=f"{key_prefix}_types")
+    st.markdown("###### 🎯 Critères")
+    types = st.multiselect("Types", IMMOKH_TYPES, default=[t for t in d.get("property_types",[]) if t in IMMOKH_TYPES], key=f"{key_prefix}_types")
     cities = st.text_input("Villes (ex: Namur, Jambes)", value=",".join(d.get("cities",[])), key=f"{key_prefix}_cities")
     
     c1, c2, c3 = st.columns(3)
@@ -259,143 +208,161 @@ def filters_ui(default=None, key_prefix=""):
         "include_sold": False
     }
 
-def filters_badges(f):
+def filters_badges_html(f):
     if not f: return ""
-    badges = []
-    for t in f.get("property_types", []): badges.append(f"🏠 {t.capitalize()}")
-    for c in f.get("cities", []): badges.append(f"📍 {c}")
-    if f.get("price_max"): badges.append(f"💰 Max {f['price_max']}€")
-    if f.get("bedrooms_min"): badges.append(f"🛏️ {f['bedrooms_min']}+ ch")
-    return " ".join([f"<span class='badge-filter'>{b}</span>" for b in badges])
+    html = ""
+    # Types
+    if f.get("property_types"):
+        for t in f["property_types"]: html += f"<span class='filter-pill'>🏠 {t.capitalize()}</span>"
+    # Villes
+    if f.get("cities"):
+        for c in f["cities"]: html += f"<span class='filter-pill'>📍 {c}</span>"
+    # Prix
+    p_max = int(f.get("price_max") or 0)
+    if p_max > 0: html += f"<span class='filter-pill'>💰 Max {p_max}€</span>"
+    # Chambres
+    b_min = int(f.get("bedrooms_min") or 0)
+    if b_min > 0: html += f"<span class='filter-pill'>🛏️ {b_min}+ ch</span>"
+    
+    return html
 
 # ============== APP START ==============
 
 if "alerts" not in st.session_state:
     st.session_state.alerts = load_alerts()
 
-# --- 1. IDENTITÉ (Header) ---
-st.markdown('<div class="identity-box">', unsafe_allow_html=True)
-c_id_text, c_id_input = st.columns([1.5, 2])
-with c_id_text:
-    st.markdown("## 👋 Bonjour")
-    st.markdown("Entrez votre email pour gérer vos alertes.")
-with c_id_input:
-    user_email = st.text_input("", placeholder="exemple@gmail.com", label_visibility="collapsed")
-st.markdown('</div>', unsafe_allow_html=True)
+# --- 1. HEADER "CLEAN" (Pas de boite) ---
+# On utilise directement st.title et st.text_input sans wrapper HTML qui bug.
+st.markdown('<div class="header-title">🔔 AlertMe</div>', unsafe_allow_html=True)
+st.markdown('<div class="header-subtitle">Gérez vos surveillances immobilières en temps réel</div>', unsafe_allow_html=True)
+
+user_email = st.text_input("Votre adresse email", placeholder="exemple@gmail.com", help="Entrez votre email pour voir ou créer vos alertes")
 
 is_email_valid = is_valid_email(user_email)
 user_alerts = [a for a in st.session_state.alerts if a.get("email") == user_email.strip()] if is_email_valid else []
 
-# --- 2. CRÉATION (Always Visible) ---
-st.markdown('<div class="create-section">', unsafe_allow_html=True)
-st.markdown(f'<div class="create-title">✨ Créer une nouvelle alerte {f"pour {user_email}" if is_email_valid else ""}</div>', unsafe_allow_html=True)
+st.divider()
 
+# --- 2. CRÉATION (Intégrée proprement) ---
+st.subheader("✨ Ajouter une alerte")
+
+# Utilisation de st.container pour un fond subtil si désiré, ou juste tabs
 tab_iw, tab_mt, tab_ka = st.tabs(["Immoweb", "ImmoToma", "Immo-KH & AD-HOME"])
 
 # > Immoweb
 with tab_iw:
     with st.form("new_iw", clear_on_submit=True):
-        u = st.text_input("URL de recherche Immoweb", placeholder="https://www.immoweb.be/fr/recherche/...")
-        l = st.text_input("Nom de l'alerte (ex: Maison Bruxelles)", placeholder="Optionnel")
-        submitted = st.form_submit_button("Ajouter l'alerte", use_container_width=True)
+        c1, c2 = st.columns([3, 2])
+        with c1: u = st.text_input("URL de recherche Immoweb", placeholder="https://www.immoweb.be/...")
+        with c2: l = st.text_input("Nom de l'alerte", placeholder="Ex: Appart XL")
+        submitted = st.form_submit_button("Activer cette alerte")
         
         if submitted:
-            if not is_email_valid: st.error("Veuillez entrer un email valide en haut de page.")
-            elif not host_ok("immoweb", u): st.warning("L'URL ne semble pas venir d'Immoweb.")
+            if not is_email_valid: st.warning("👆 Veuillez d'abord entrer votre email valide ci-dessus.")
+            elif not host_ok("immoweb", u): st.error("L'URL n'est pas valide pour Immoweb.")
             else:
                 try:
                     clean_url = canonicalize_immoweb_url(u)
                     rec = {"site":"immoweb","url":clean_url,"email":user_email.strip(),"label":l.strip(),"pages":20}
-                    st.session_state.alerts.append(rec) # Optimistic UI
+                    st.session_state.alerts.append(rec)
                     append_event("add", rec, "Add IW")
-                    st.toast("Alerte Immoweb ajoutée !", icon="✅")
+                    st.toast("Alerte Immoweb active !", icon="✅")
                     st.rerun()
-                except Exception as e: st.error(f"Erreur URL: {e}")
+                except Exception as e: st.error(f"Erreur: {e}")
 
 # > Toma
 with tab_mt:
     with st.form("new_mt", clear_on_submit=True):
-        u = st.text_input("URL de recherche ImmoToma", placeholder="https://immotoma.be/advanced-search/...")
-        l = st.text_input("Nom de l'alerte", placeholder="Optionnel")
-        submitted = st.form_submit_button("Ajouter l'alerte", use_container_width=True)
+        c1, c2 = st.columns([3, 2])
+        with c1: u = st.text_input("URL de recherche ImmoToma", placeholder="https://immotoma.be/...")
+        with c2: l = st.text_input("Nom de l'alerte", placeholder="Ex: Investissement")
+        submitted = st.form_submit_button("Activer cette alerte")
         
         if submitted:
-            if not is_email_valid: st.error("Veuillez entrer un email valide en haut de page.")
-            elif not host_ok("marjorietome", u): st.warning("L'URL ne semble pas venir d'ImmoToma.")
+            if not is_email_valid: st.warning("👆 Veuillez d'abord entrer votre email valide ci-dessus.")
+            elif not host_ok("marjorietome", u): st.error("L'URL n'est pas valide pour ImmoToma.")
             else:
                 try:
                     clean_url = canonicalize_marjorietome_url(u)
                     rec = {"site":"marjorietome","url":clean_url,"email":user_email.strip(),"label":l.strip(),"pages":20}
                     st.session_state.alerts.append(rec)
                     append_event("add", rec, "Add MT")
-                    st.toast("Alerte ImmoToma ajoutée !", icon="✅")
+                    st.toast("Alerte ImmoToma active !", icon="✅")
                     st.rerun()
                 except: st.error("URL invalide")
 
 # > KH/AD
 with tab_ka:
     with st.form("new_ka", clear_on_submit=True):
-        st.info("Crée deux alertes simultanées (Immo-KH et AD-HOME).")
-        l = st.text_input("Nom global", placeholder="Ex: Terrains Namur")
+        st.caption("Ce formulaire active automatiquement la surveillance sur **Immo-KH** et **AD-HOME**.")
+        l = st.text_input("Nom global de la recherche", placeholder="Ex: Maison familiale")
         f_data = filters_ui(key_prefix="new_ka")
-        submitted = st.form_submit_button("Ajouter les 2 alertes", use_container_width=True)
+        submitted = st.form_submit_button("Activer la surveillance double")
         
         if submitted:
-            if not is_email_valid: st.error("Veuillez entrer un email valide en haut de page.")
+            if not is_email_valid: st.warning("👆 Veuillez d'abord entrer votre email valide ci-dessus.")
             else:
                 for s_id, s_url in [("immokh", IMMOKH_LIST), ("adhome", ADHOME_LIST)]:
                     rec = {"site":s_id,"url":s_url,"email":user_email.strip(),"label":l.strip(),"filters":f_data,"use_browser":True,"pages":20}
                     st.session_state.alerts.append(rec)
                     append_event("add", rec, f"Add {s_id}")
-                st.toast("Alertes créées avec succès !", icon="🚀")
+                st.toast("Surveillance double activée !", icon="🚀")
                 st.rerun()
 
-st.markdown('</div>', unsafe_allow_html=True)
+st.divider()
 
-# --- 3. LISTE FILTRÉE ---
-st.subheader(f"📋 Mes Alertes Actives ({len(user_alerts)})")
+# --- 3. LISTE DES ALERTES (Design Flat & Clean) ---
+st.subheader(f"📋 Vos Alertes ({len(user_alerts)})")
 
 if not is_email_valid:
-    st.info("👆 Entrez votre email ci-dessus pour voir vos alertes.")
+    st.info("Entrez votre email pour gérer vos surveillances.")
 elif not user_alerts:
-    st.markdown(f"""
-    <div class="empty-state">
-        <h3>Aucune alerte trouvée pour {user_email}</h3>
-        <p>Utilisez le formulaire ci-dessus pour créer votre première surveillance.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.caption("Aucune alerte active pour cet email.")
 else:
+    # Itération pour affichage
     for i, alert in enumerate(user_alerts):
-        # Recherche de l'index réel dans la liste globale pour suppression correcte
-        real_index = next((idx for idx, a in enumerate(st.session_state.alerts) 
-                          if a == alert), None)
-        
+        # Récupérer l'index réel pour la suppression
+        real_index = next((idx for idx, a in enumerate(st.session_state.alerts) if a == alert), None)
         if real_index is None: continue
 
-        site = alert.get("site")
-        label = alert.get("label") or "Sans titre"
-        url = alert.get("url")
+        site = alert.get("site", "N/A")
+        label = alert.get("label") or "Alerte sans nom"
+        url = alert.get("url", "")
         filters = alert.get("filters")
         
-        # Render Card
+        # Container simple SANS cadre HTML vide
         with st.container():
-            st.markdown('<div class="alert-card">', unsafe_allow_html=True)
-            c1, c2 = st.columns([5, 1])
+            # Layout: Colonne Contenu (Texte) | Colonne Action (Bouton)
+            c_content, c_action = st.columns([0.85, 0.15])
             
-            with c1:
-                st.markdown(f"**{label}** <span class='badge-site'>{site}</span>", unsafe_allow_html=True)
+            with c_content:
+                # Tout le contenu visuel est généré en HTML ici
+                # Badge site
+                site_badge = f"<span class='badge-site'>{site}</span>"
+                
+                # Contenu technique (Filtres ou URL)
                 if site in BROWSER_SITES:
-                    st.markdown(filters_badges(filters), unsafe_allow_html=True)
+                    tech_info = filters_badges_html(filters)
                 else:
-                    st.caption(f"🔗 {url[:60]}...")
-            
-            with c2:
-                if st.button("🗑️", key=f"del_{i}_{real_index}"):
+                    # URL tronquée propre
+                    disp_url = (url[:70] + '...') if len(url) > 70 else url
+                    tech_info = f"<a href='{url}' target='_blank' class='card-link'>🔗 {disp_url}</a>"
+
+                # HTML Block complet
+                st.markdown(f"""
+                    <div class='card-title'>{label} {site_badge}</div>
+                    <div class='card-meta'>{tech_info}</div>
+                """, unsafe_allow_html=True)
+
+            with c_action:
+                # Bouton Streamlit natif, bien aligné
+                st.write("") # Spacer pour alignement vertical
+                if st.button("🗑️", key=f"del_{i}_{real_index}", help="Supprimer"):
                     st.session_state.alerts.pop(real_index)
-                    # Reconstruction pour delete event
                     payload = {"site":site,"url":url}
                     if filters: payload["filters"] = filters
                     append_event("delete", payload, "User delete")
                     st.rerun()
-                    
-            st.markdown("</div>", unsafe_allow_html=True)
+            
+            # Ligne de séparation fine
+            st.divider()
